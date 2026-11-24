@@ -249,3 +249,26 @@ installation, no change to repository visibility. Owner requested push
 to existing private remote. Public license choice, corresponding-source
 and Deno dependency obligations, and cross-distro ABI qualification remain
 open. No history rewrite.
+
+## v0.6.0 — playlist link import
+Dock accepts supported static public YouTube playlist URLs. Mixed video/
+playlist links offer This video or Entire playlist. Queue appends in order
+without interrupting playback; Play selects first and prepends remainder,
+enabling auto-advance without evicting previous queue. One flat-playlist
+enumeration, at most 101 entries, 45s deadline, 4 MiB cap, cancellable,
+bound to selected source UUID. Source applies validated batch on video
+thread and reports actual counts through bounded receipt bookkeeping.
+Titles/channels/durations cached by video ID; queue summary shows known
+duration and unknown count; URLs persist, imported metadata not persisted.
+Known inaccessible entries skipped; unknown availability may fail later.
+Red test missing import API before implementation; CTest 9/9.
+Actual bundled engine with empty PATH and fresh HOME, public Blender
+uploads playlist: cancel left one original entry; Queue added 99 entries
+and preserved original playback and entry, metadata/summary passed;
+Play selected first, kept 100 upcoming including old entry, enabled
+auto-advance, real new playback/mixer audio passed. Import smoke exit 0,
+24178 dimension queries, teardown. Normal regression exit 0: 1080p,
+transport, thumbnails, reorder, EOF/auto-next, queue edit/stop preservation,
+50741 dimension queries and teardown. Mixed-link menu and source-change
+cancellation not separately exercised in live smoke. No production install
+or push. Concurrent CI documentation files outside this slice left untouched.

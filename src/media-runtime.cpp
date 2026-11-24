@@ -1,5 +1,6 @@
 #include "media-runtime.hpp"
 #include "resolver.hpp"
+#include "runtime-update.hpp"
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
@@ -116,4 +117,16 @@ QByteArray probeMediaHttps(const QString &url, bool hls,
     return status >= 200 && status < 300 ? body : QByteArray{};
   }
   return {};
+}
+
+MediaRuntime selectMediaRuntime(const QString &bundle, const QString &managed) {
+  auto engine = findMediaRuntime(bundle);
+  if (engine.bundled) {
+    auto updated = preferredRuntimeExecutable(bundle, managed);
+    if (!updated.isEmpty() && updated != engine.extractor) {
+      engine.extractor = updated;
+      engine.updated = true;
+    }
+  }
+  return engine;
 }

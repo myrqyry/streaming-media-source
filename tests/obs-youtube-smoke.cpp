@@ -1,4 +1,5 @@
 #include "media-dock.hpp"
+#include "media-queue.hpp"
 #include <QApplication>
 #include <QComboBox>
 #include <QJsonArray>
@@ -212,7 +213,11 @@ int main(int argc, char **argv) {
     fprintf(stderr, "CONTROL pause=%d seek=%d resume_audio=%d time=%lld\n",
             pause, seek, resume, (long long)obs_source_media_get_time(s));
   }
-  std::unique_ptr<QWidget> dock(createMediaDockWidget());
+  auto moduleData = qEnvironmentVariable("SMOKE_MODULE_DATA", tmp.path());
+  std::unique_ptr<QWidget> dock(createMediaDockWidget(
+      moduleData + "/runtime",
+      qEnvironmentVariable("SMOKE_MODULE_CONFIG", tmp.path()) +
+          "/obs-streaming-media/runtime"));
   dock->resize(360, 430);
   dock->show();
   auto picker = dock->findChild<QComboBox *>("media-source-picker");
@@ -237,9 +242,83 @@ int main(int argc, char **argv) {
   if (widgetReady)
     dock->grab().save("build/dock-widget-preview.png");
   const bool recoveryMode = qEnvironmentVariableIntValue("SMOKE_RECOVERY") != 0;
+  const bool importMode =
+      qEnvironmentVariableIntValue("SMOKE_PLAYLIST_IMPORT") != 0;
+  bool importPass = false;
   bool recoveryPass = false;
   bool queueEdit = false, nextPlayback = false, stopped = false,
        autoNext = false;
+  if (importMode && playing && pause && seek && resume && widgetReady) {
+    auto label = dock->findChild<QLabel *>("media-import-status");
+    auto cancel = dock->findChild<QToolButton *>("media-import-cancel");
+    auto total = dock->findChild<QLabel *>("media-queue-duration");
+    auto playList = dock->findChild<QPushButton *>("media-url-play");
+    const QString link =
+        "https://www.youtube.com/playlist?list=UUSMOQeBJ2RAnuFungnQOxLg";
+    const QString old = "https://youtu.be/jNQXAC9IVRw";
+    auto start = currentUrl(s);
+    queueCommand(s, "append", qPrintable(old));
+    bool seeded = until(3, [&] { return queued(s) == QStringList{old}; });
+    entry->setText(link);
+    add->click();
+    bool cancellable = cancel && cancel->isVisible();
+    if (cancellable)
+      cancel->click();
+    bool cancelled = cancellable && until(3, [&] {
+                       return label && label->text().contains("cancelled") &&
+                              queued(s) == QStringList{old};
+                     });
+    until(3, [&] { return add->isEnabled(); });
+    auto position = obs_source_media_get_time(s);
+    entry->setText(link);
+    add->click();
+    bool imported = until(55, [&] {
+      return label && label->text().startsWith("Imported") &&
+             queued(s).size() == 100;
+    });
+    auto importedQueue = queued(s);
+    bool uninterrupted =
+        imported && currentUrl(s) == start && importedQueue.first() == old &&
+        obs_source_media_get_time(s) > position &&
+        obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING;
+    bool metadata = until(5, [&] {
+      return rows->count() == 100 &&
+             rows->item(1)->text() != videoId(importedQueue.value(1)) &&
+             total && !total->text().isEmpty();
+    });
+    fprintf(stderr,
+            "IMPORT_QUEUE seeded=%d cancelled=%d imported=%d uninterrupted=%d "
+            "metadata=%d count=%lld summary=%s\n",
+            seeded, cancelled, imported, uninterrupted, metadata,
+            (long long)importedQueue.size(),
+            qPrintable(label ? label->text() : QString()));
+    queueCommand(s, "clear", "");
+    until(3, [&] { return queued(s).isEmpty(); });
+    queueCommand(s, "append", qPrintable(old));
+    until(3, [&] { return queued(s) == QStringList{old}; });
+    if (playList) {
+      entry->setText(link);
+      playList->click();
+    }
+    bool started = imported && until(55, [&] {
+                     return label && label->text().contains("first selected") &&
+                            currentUrl(s) == importedQueue.value(1) &&
+                            queued(s).size() == 100 && queued(s).last() == old;
+                   });
+    auto settings = obs_source_get_settings(s);
+    bool autoAdvance = obs_data_get_bool(settings, "auto_advance");
+    obs_data_release(settings);
+    auto n = mixed.load();
+    bool newPlayback =
+        started && until(40, [&] {
+          return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+                 mixed > n + 10;
+        });
+    fprintf(stderr, "IMPORT_PLAY selected=%d autoplay=%d playback=%d\n",
+            started, autoAdvance, newPlayback);
+    importPass = seeded && cancelled && imported && uninterrupted && metadata &&
+                 started && autoAdvance && newPlayback;
+  }
   if (recoveryMode && playing && pause && seek && resume && widgetReady) {
     // Simulate an unexpected decoder stop through the real libobs child
     // transport. This is not a simulated network outage.
@@ -296,7 +375,8 @@ int main(int argc, char **argv) {
             reconnect, resumed, cancelled, preserved, (long long)oldPos);
     recoveryPass = reconnect && resumed && cancelled && preserved;
   }
-  if (!recoveryMode && playing && pause && seek && resume && widgetReady) {
+  if (!importMode && !recoveryMode && playing && pause && seek && resume &&
+      widgetReady) {
     const char *other = "https://youtu.be/aqz-KE-bpKQ";
     const char *third = "https://youtu.be/jNQXAC9IVRw";
     entry->setText(third);
@@ -432,7 +512,8 @@ int main(int argc, char **argv) {
   obs_shutdown();
   return dimensionQueries > 100 && released && playing && pause && seek &&
                  resume && widgetReady &&
-                 (recoveryMode
+                 (importMode ? importPass
+                  : recoveryMode
                       ? recoveryPass
                       : (queueEdit && nextPlayback && stopped && autoNext))
              ? 0

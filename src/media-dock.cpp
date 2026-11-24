@@ -1,5 +1,7 @@
 #include "media-dock.hpp"
 #include "media-queue.hpp"
+#include "media-runtime.hpp"
+#include "playlist-import.hpp"
 #include "playlist-metadata.hpp"
 #include "runtime-update.hpp"
 #include <QApplication>
@@ -10,12 +12,15 @@
 #include <QDir>
 #include <QDrag>
 #include <QDropEvent>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QImageReader>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -26,6 +31,7 @@
 #include <QNetworkRequest>
 #include <QPainter>
 #include <QPointer>
+#include <QProcess>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -233,6 +239,197 @@ struct CachedPlaylistItem {
 };
 class MediaDock : public QWidget {
   QVBoxLayout *mainLayout = nullptr;
+  QProcess *importProcess = nullptr;
+  QLabel *importStatus = nullptr;
+  QToolButton *importCancel = nullptr;
+  QByteArray importBytes;
+  QString importSource, importReceipt;
+  bool importPlay = false;
+  int importTotal = -1, importFound = 0, importSkipped = 0;
+  QElapsedTimer receiptTimer;
+  void importMessage(const QString &message) {
+    importStatus->setText(message);
+    importStatus->setToolTip(message);
+    importStatus->setVisible(!message.isEmpty());
+    importCancel->setVisible(importProcess != nullptr);
+  }
+  void cancelImport(const QString &message) {
+    if (!importProcess)
+      return;
+    auto p = importProcess;
+    importProcess = nullptr;
+    disconnect(p, nullptr, this, nullptr);
+    p->kill();
+    p->waitForFinished(1000);
+    p->deleteLater();
+    importBytes.clear();
+    importMessage(message);
+  }
+  void updateQueueDuration() {
+    qint64 total = 0;
+    int known = 0;
+    for (auto &u : queueUrls) {
+      auto cached = playlistCache.object(videoId(u));
+      if (cached && cached->metadata.durationMs >= 0) {
+        total += cached->metadata.durationMs;
+        ++known;
+      }
+    }
+    auto summary = QString("Up next · %1").arg(queueUrls.size());
+    count->setText(summary);
+    count->setToolTip(
+        known ? summary + " · " + clockText(total) +
+                    (known == queueUrls.size()
+                         ? " remaining"
+                         : " known · " +
+                               QString::number(queueUrls.size() - known) +
+                               " unknown durations")
+              : summary);
+    queueDuration->setText(
+        known ? clockText(total) +
+                    (known == queueUrls.size()
+                         ? " queued"
+                         : " known · " +
+                               QString::number(queueUrls.size() - known) +
+                               " unknown")
+              : QString{});
+    queueDuration->setVisible(known > 0);
+  }
+  void pollImportReceipt() {
+    if (importReceipt.isEmpty())
+      return;
+    auto s = sourceRef(importSource);
+    QString result;
+    if (s && !obs_source_removed(s.get())) {
+      calldata_t c;
+      calldata_init(&c);
+      calldata_set_string(&c, "requestId", qPrintable(importReceipt));
+      proc_handler_call(obs_source_get_proc_handler(s.get()),
+                        "streaming_media_request_status", &c);
+      result = QString::fromUtf8(calldata_string(&c, "status"));
+      calldata_free(&c);
+    }
+    if (result == "pending" && receiptTimer.elapsed() < 10000)
+      return;
+    importReceipt.clear();
+    auto parts = result.split(':');
+    if (parts.size() == 3 && parts[0] == "imported") {
+      int added = parts[1].toInt(), started = parts[2].toInt();
+      QString msg = QString("Imported · %1 queued").arg(added);
+      if (started)
+        msg += " · first selected";
+      if (importFound > added + started ||
+          importTotal > importFound + importSkipped)
+        msg += " · limited by queue capacity";
+      if (importSkipped)
+        msg += QString(" · %1 unavailable skipped").arg(importSkipped);
+      importMessage(msg);
+    } else
+      importMessage("Import result unavailable; check queue");
+  }
+  void beginImport(const QString &link, bool immediate) {
+    if (importProcess || !importReceipt.isEmpty())
+      return;
+    auto s = selected();
+    if (!s)
+      return;
+    auto engine = selectMediaRuntime(runtimeBundle, runtimeManaged);
+    if (!engine.ready()) {
+      importMessage("Media engine missing");
+      return;
+    }
+    importSource = QString::fromUtf8(obs_source_get_uuid(s.get()));
+    importPlay = immediate;
+    importBytes.clear();
+    auto p = new QProcess(this);
+    importProcess = p;
+    p->setProgram(engine.extractor);
+    p->setArguments({"--ignore-config", "--flat-playlist", "--playlist-end",
+                     "101", "--dump-single-json", "--skip-download",
+                     "--no-warnings", "--no-progress", "--socket-timeout", "10",
+                     "--retries", "1", "--no-js-runtimes", "--js-runtimes",
+                     engine.engine + ":" + engine.js, "--", link});
+    auto drain = [this, p] {
+      if (importProcess != p)
+        return;
+      importBytes += p->readAllStandardOutput();
+      p->readAllStandardError();
+      if (importBytes.size() > 4 * 1024 * 1024)
+        cancelImport("Playlist response too large");
+    };
+    connect(p, &QProcess::readyReadStandardOutput, this, drain);
+    connect(p, &QProcess::readyReadStandardError, this,
+            [p] { p->readAllStandardError(); });
+    connect(p, &QProcess::errorOccurred, this,
+            [this, p](QProcess::ProcessError error) {
+              if (importProcess == p && error == QProcess::FailedToStart)
+                cancelImport("Cannot start media engine");
+            });
+    connect(p, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [this, p, drain](int code, QProcess::ExitStatus exit) {
+              if (importProcess != p)
+                return;
+              drain();
+              if (importProcess != p)
+                return;
+              importProcess = nullptr;
+              p->deleteLater();
+              auto data = parseImportedPlaylist(importBytes);
+              importBytes.clear();
+              if (code != 0 || exit != QProcess::NormalExit ||
+                  data.entries.isEmpty()) {
+                importMessage("No available playlist videos found");
+                return;
+              }
+              auto s = sourceRef(importSource);
+              if (!s || obs_source_removed(s.get()) ||
+                  sources->currentData().toString() != importSource) {
+                importMessage("Import cancelled · source changed");
+                return;
+              }
+              QJsonArray urls;
+              for (const auto &entry : data.entries) {
+                urls.append(entry.url);
+                auto id = videoId(entry.url);
+                auto cached = playlistCache.object(id);
+                if (!cached) {
+                  cached = new CachedPlaylistItem;
+                  playlistCache.insert(id, cached);
+                }
+                cached->metadata = entry.metadata;
+                cached->titleDone = !entry.metadata.title.isEmpty();
+              }
+              importFound = data.entries.size();
+              importTotal = data.total;
+              importSkipped = data.skipped;
+              auto json = QJsonDocument(urls).toJson(QJsonDocument::Compact);
+              calldata_t c;
+              calldata_init(&c);
+              calldata_set_string(&c, "urls", json.constData());
+              calldata_set_bool(&c, "play", importPlay);
+              proc_handler_call(obs_source_get_proc_handler(s.get()),
+                                "streaming_media_import", &c);
+              importReceipt =
+                  QString::fromUtf8(calldata_string(&c, "requestId"));
+              calldata_free(&c);
+              if (importReceipt.isEmpty()) {
+                importMessage("Queue busy · try again");
+                return;
+              }
+              receiptTimer.start();
+              for (int i = 0; i < queue->count(); ++i)
+                decorateQueueItem(queue->item(i));
+              updateQueueDuration();
+              importMessage("Applying playlist…");
+            });
+    QTimer::singleShot(45000, p, [this, p] {
+      if (importProcess == p)
+        cancelImport("Playlist import timed out");
+    });
+    importMessage("Importing playlist…");
+    p->start();
+  }
+
   QString runtimeBundle, runtimeManaged;
   QLabel *engineStatus = nullptr;
   QToolButton *engineMenu = nullptr;
@@ -283,7 +480,7 @@ class MediaDock : public QWidget {
   bool themeRefreshPending = false, themeReady = false;
   QComboBox *sources;
   QLineEdit *url;
-  QLabel *thumbnail, *title, *status, *time, *count;
+  QLabel *thumbnail, *title, *status, *time, *count, *queueDuration;
   QSlider *timeline;
   QToolButton *play, *stop, *back, *forward, *next, *retry, *up, *down, *remove;
   QPushButton *load, *append;
@@ -407,12 +604,33 @@ class MediaDock : public QWidget {
   }
   void submit(bool immediate) {
     auto value = url->text().trimmed();
-    if (videoId(value).isEmpty()) {
-      url->setToolTip("Enter a valid HTTPS YouTube video URL");
+    if (importProcess || !importReceipt.isEmpty())
+      return;
+    auto playlist = canonicalPlaylistUrl(value);
+    auto id = videoId(value);
+    if (!playlist.isEmpty()) {
+      bool entire = id.isEmpty();
+      if (!id.isEmpty()) {
+        QMenu choice(this);
+        auto video = choice.addAction("This video");
+        auto all = choice.addAction("Entire playlist");
+        auto chosen = choice.exec(url->mapToGlobal(QPoint(0, url->height())));
+        if (!chosen)
+          return;
+        entire = chosen == all;
+      }
+      if (entire)
+        beginImport(playlist, immediate);
+      else
+        action(immediate ? "load" : "append",
+               "https://www.youtube.com/watch?v=" + id);
+    } else if (!id.isEmpty()) {
+      action(immediate ? "load" : "append", value);
+    } else {
+      url->setToolTip("Enter a valid HTTPS YouTube video or playlist URL");
       url->setFocus();
       return;
     }
-    action(immediate ? "load" : "append", value);
     url->clear();
     url->setToolTip({});
   }
@@ -511,7 +729,13 @@ class MediaDock : public QWidget {
                      ? cached->metadata.title
                      : id;
     item->setText(title);
-    item->setData(AuthorRole, cached ? cached->metadata.author : QString{});
+    auto author = cached ? cached->metadata.author : QString{};
+    if (cached && cached->metadata.durationMs >= 0) {
+      if (!author.isEmpty())
+        author += " · ";
+      author += clockText(cached->metadata.durationMs);
+    }
+    item->setData(AuthorRole, author);
     // Retain the original URL for accessible navigation and diagnostics.
     item->setToolTip(
         "<qt>" + title.toHtmlEscaped() + "<br>" +
@@ -581,9 +805,13 @@ class MediaDock : public QWidget {
                     if (reply->error() == QNetworkReply::NoError &&
                         reply->bytesAvailable() <= limit) {
                       auto bytes = reply->readAll();
-                      if (metadata)
-                        cached->metadata = parsePlaylistMetadata(bytes);
-                      else {
+                      if (metadata) {
+                        auto parsed = parsePlaylistMetadata(bytes);
+                        if (!parsed.title.isEmpty())
+                          cached->metadata.title = parsed.title;
+                        if (!parsed.author.isEmpty())
+                          cached->metadata.author = parsed.author;
+                      } else {
                         QBuffer buffer(&bytes);
                         buffer.open(QIODevice::ReadOnly);
                         QImageReader reader(&buffer, "JPEG");
@@ -624,16 +852,19 @@ class MediaDock : public QWidget {
     }
     if (previous >= 0 && !queueUrls.isEmpty())
       queue->setCurrentRow(std::min(previous, int(queueUrls.size() - 1)));
-    count->setText(QString("Up next · %1").arg(queueUrls.size()));
+    updateQueueDuration();
   }
   void refresh() {
     if (shuttingDown)
       return;
+    pollImportReceipt();
     if (refreshCount++ % 4 == 0)
       refreshSources();
     auto s = selected();
     auto id = sources->currentData().toString();
     if (id != sourceId) {
+      if (importProcess)
+        cancelImport("Import cancelled · source changed");
       sourceId = id;
       queueJson.clear();
       queueUrls.clear();
@@ -645,6 +876,8 @@ class MediaDock : public QWidget {
     for (QWidget *w :
          std::initializer_list<QWidget *>{url, load, append, queue, autoplay})
       w->setEnabled(present);
+    load->setEnabled(present && !importProcess && importReceipt.isEmpty());
+    append->setEnabled(present && !importProcess && importReceipt.isEmpty());
     if (!present) {
       title->setText("Add a Streaming Media source");
       status->setText("Choose Sources → + → Streaming Media (YouTube)");
@@ -728,16 +961,33 @@ public:
     auto input = new QHBoxLayout;
     url = new QLineEdit(this);
     url->setObjectName("media-url");
-    url->setPlaceholderText("YouTube URL");
+    url->setPlaceholderText("Video or playlist URL");
     url->setClearButtonEnabled(true);
     url->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     load = new QPushButton("Play", this);
+    load->setObjectName("media-url-play");
     append = new QPushButton("Queue", this);
     append->setObjectName("media-queue-add");
     input->addWidget(url, 1);
     input->addWidget(load);
     input->addWidget(append);
     layout->addLayout(input);
+    auto importRow = new QHBoxLayout;
+    importStatus = new QLabel(this);
+    importStatus->setObjectName("media-import-status");
+    importStatus->setTextFormat(Qt::PlainText);
+    importStatus->setWordWrap(true);
+    importStatus->setProperty("class", "text-muted");
+    importStatus->hide();
+    importCancel = tool(QStyle::SP_DialogCancelButton, "Cancel playlist import",
+                        "icon-trash");
+    importCancel->setObjectName("media-import-cancel");
+    importCancel->hide();
+    connect(importCancel, &QToolButton::clicked, this,
+            [this] { cancelImport("Playlist import cancelled"); });
+    importRow->addWidget(importStatus, 1);
+    importRow->addWidget(importCancel);
+    layout->addLayout(importRow);
     auto now = new QHBoxLayout;
     thumbnail = new QLabel("No video", this);
     thumbnail->setObjectName("media-thumbnail");
@@ -797,6 +1047,11 @@ public:
     autoplay = new QCheckBox("Auto advance", this);
     header->addWidget(autoplay);
     layout->addLayout(header);
+    queueDuration = new QLabel(this);
+    queueDuration->setObjectName("media-queue-duration");
+    queueDuration->setProperty("class", "text-muted");
+    queueDuration->hide();
+    layout->addWidget(queueDuration);
     queue = new PlaylistView(this);
     queue->setItemDelegate(new PlaylistDelegate(queue));
     queue->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -949,8 +1204,12 @@ public:
     refreshCount = 0;
     refresh();
   }
-  ~MediaDock() override { stopEngineUpdate(); }
+  ~MediaDock() override {
+    cancelImport({});
+    stopEngineUpdate();
+  }
   void shutdown() {
+    cancelImport({});
     stopEngineUpdate();
     shuttingDown = true;
     timer->stop();

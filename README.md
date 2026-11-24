@@ -10,6 +10,12 @@ desktop capture, listening port, or full-video download.
 
 *Version 0.5.1 in OBS 32.2 with the Colorway Fluffy Dark theme, using a disposable demo scene.*
 
+[Get started](#install-a-local-test-package) · [Playback and playlists](#playback-dock-02) · [WebSocket requests](#websocket-video-requests-03) · [Verification](#verification) · [Troubleshooting](#troubleshooting)
+
+> **Development preview.** Linux x86_64 and native OBS 32.2 are the current
+> locally exercised target. Public release packages are not available.
+> [Build checks](https://github.com/myrqyry/streaming-media-source/actions) · [Release readiness](RELEASE_CHECKLIST.md)
+
 ## Requirements
 
 - OBS Studio 32.x, native Linux installation (development/verification target:
@@ -30,7 +36,7 @@ the per-user plugins directory:
 
 ```sh
 mkdir -p "$HOME/.config/obs-studio/plugins"
-tar -xzf streaming-media-source-0.5.1-linux-x86_64-bundled.tar.gz \
+tar -xzf streaming-media-source-0.6.0-linux-x86_64-bundled.tar.gz \
   -C "$HOME/.config/obs-studio/plugins"
 ```
 
@@ -110,8 +116,37 @@ asynchronous, bounded and cached in memory by video ID. Only visible
 rows are requested, one at a time; unavailable metadata falls back to
 the video ID without blocking playback. The delegate inherits the OBS
 theme and selection palette. Queue entries remain original URLs in
-scene settings. Durations, total remaining time, shuffle and repeat
-are not yet implemented.
+scene settings.
+
+### Import YouTube playlists (0.6.0)
+
+Paste a public playlist URL into the existing dock URL field.
+
+- **Queue** appends available videos in playlist order, preserving the
+  current video and the existing auto-advance setting.
+- **Play** selects the first available video, prepends the rest ahead of
+  existing upcoming videos, and enables Auto advance. Existing queued
+  entries are never evicted.
+- A video URL with a supported playlist ID offers **This video** or
+  **Entire playlist**. Dynamic mixes and authenticated playlists are
+  outside the supported scope.
+- An independent asynchronous yt-dlp flat-playlist request enumerates
+  metadata without resolving each item's actual media streams. It examines
+  at most 101 entries per import, with a 45-second deadline and 4 MiB
+  response limit. The queue still holds at most 100 upcoming videos.
+- Cancel while importing to leave playback and queue unchanged. A source
+  change cancels an in-flight enumeration; the resulting batch is applied
+  to its original source, never the newly selected source.
+- Known inaccessible entries are skipped; entries unavailable only at
+  playback time may still fail later. The dock reports the number actually
+  queued and capacity limits.
+- Titles, channel names and known durations populate the in-memory metadata
+  cache. Thumbnails still use the existing fixed-host fetcher. The queue
+  duration summary explicitly identifies missing durations. After restarting
+  OBS, URLs persist but imported durations must be fetched again by importing
+  the playlist; they are not stored in scene settings.
+
+Shuffle and repeat are not yet implemented.
 
 ### Playback recovery (0.4)
 
@@ -219,6 +254,23 @@ the child's own output mixer is disabled to avoid double routing.
 
 ## Verification
 
+The [Linux CI workflow](.github/workflows/ci.yml) uses a pinned OBS 32.2.0
+SDK and the matching obs-websocket API header. It runs the deterministic
+native CTest suite (at least eight tests, no skips), checks README links,
+and validates a module-only Linux install archive and checksum.
+The CI path deliberately does not download or bundle yt-dlp/Deno, run live
+YouTube playback, or upload release binaries.
+
+| Target | Verification boundary |
+| --- | --- |
+| Linux x86_64 / OBS 32.2 / Qt 6.4.2 | Local native tests, isolated real playback and bundled package smoke |
+| Ubuntu 24.04 / pinned OBS 32.2 SDK | CI configured; hosted result pending |
+| Windows, macOS, Flatpak, other OBS majors | Not qualified |
+
+See the [CI guide](docs/ci.md) for local reproduction. The optional real
+playback smoke below is deliberately separate from deterministic CI.
+
+
 ```sh
 xvfb-run -a timeout 200 build/obs-youtube-smoke \
   "$PWD/build/obs-streaming-media.so" \
@@ -237,7 +289,10 @@ the same command with `SMOKE_RECOVERY=1` in the environment: this stops
 the actual private FFmpeg decoder mid-video, checks fresh resolution,
 position and mixer audio recovery, and cancels a second scheduled retry
 using the parent Stop action. This is an injected decoder interruption,
-not a simulated network outage. Set `SMOKE_PLAYLIST_DRAG=1` for the
+not a simulated network outage. Set `SMOKE_PLAYLIST_IMPORT=1` to exercise
+real public playlist enumeration, cancellation, append while playing,
+capacity limits, metadata, Play and source teardown. Set
+`SMOKE_PLAYLIST_DRAG=1` for the
 real X11 drag-reorder test in the normal playback smoke (requires Python
 Xlib). It validates that public titles and thumbnails load and that the
 actual persisted queue order changes. Test logs from FFmpeg may contain

@@ -16,3 +16,5 @@ MediaRuntime findMediaRuntime(const QString &bundle,
 QByteArray probeMediaHttps(const QString &url, bool hls,
                            std::chrono::steady_clock::time_point deadline,
                            const std::function<bool()> &cancelled);
+
+MediaRuntime selectMediaRuntime(const QString &bundle, const QString &managed);

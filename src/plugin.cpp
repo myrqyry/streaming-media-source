@@ -4,12 +4,14 @@
 #include "media-recovery.hpp"
 #include "media-runtime.hpp"
 #include "media-websocket.hpp"
+#include "playlist-import.hpp"
 #include "resolver.hpp"
 #include "runtime-update.hpp"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
@@ -63,16 +65,7 @@ static QString managedPath() {
   return result;
 }
 static MediaRuntime runtime() {
-  auto bundle = bundlePath();
-  auto engine = findMediaRuntime(bundle);
-  if (engine.bundled) {
-    auto updated = preferredRuntimeExecutable(bundle, managedPath());
-    if (!updated.isEmpty() && updated != engine.extractor) {
-      engine.extractor = updated;
-      engine.updated = true;
-    }
-  }
-  return engine;
+  return selectMediaRuntime(bundlePath(), managedPath());
 }
 struct Source {
   obs_source_t *parent = nullptr, *child = nullptr;
@@ -406,6 +399,35 @@ struct Source {
     }
     calldata_set_string(call, "status", qPrintable(status));
   }
+  static void importProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    auto payload = QString::fromUtf8(calldata_string(call, "urls"));
+    if (payload.size() > 16384)
+      return;
+    auto list = QJsonDocument::fromJson(payload.toUtf8());
+    if (!list.isArray() || list.array().isEmpty() || list.array().size() > 101)
+      return;
+    std::lock_guard<std::mutex> l(s->mutex);
+    if (s->closing || s->commands.size() >= 64)
+      return;
+    while (s->requestOrder.size() >= 256) {
+      auto it = std::find_if(s->requestOrder.begin(), s->requestOrder.end(),
+                             [&](const QString &k) {
+                               return s->requestResults.value(k) != "pending";
+                             });
+      if (it == s->requestOrder.end())
+        return;
+      s->requestResults.remove(*it);
+      s->requestOrder.erase(it);
+    }
+    auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    s->requestOrder.append(id);
+    s->requestResults.insert(id, "pending");
+    s->commands.push_back(
+        {calldata_bool(call, "play") ? "import_play" : "import_append", payload,
+         -1, -1, id});
+    calldata_set_string(call, "requestId", qPrintable(id));
+  }
   static void requestStatusProc(void *data, calldata_t *call) {
     auto s = static_cast<Source *>(data);
     auto id = QString::fromUtf8(calldata_string(call, "requestId"));
@@ -516,7 +538,23 @@ struct Source {
       if (c.op == "remote_append")
         receipts.append(
             {c.requestId, q.appendRequest(c.url, url, remoteEnabled)});
-      else if (c.op == "append")
+      else if (c.op == "import_append" || c.op == "import_play") {
+        auto list = QJsonDocument::fromJson(c.url.toUtf8()).array();
+        QStringList urls;
+        for (auto entry : list)
+          if (entry.isString() && urls.size() < 101)
+            urls.append(entry.toString());
+        auto imported = applyPlaylistImport(q, urls, c.op == "import_play");
+        if (!imported.playUrl.isEmpty()) {
+          url = imported.playUrl;
+          load = true;
+          autoAdvance = true;
+        }
+        receipts.append(
+            {c.requestId, QString("imported:%1:%2")
+                              .arg(imported.added)
+                              .arg(!imported.playUrl.isEmpty() ? 1 : 0)});
+      } else if (c.op == "append")
         q.append(c.url);
       else if (c.op == "remove" && matches())
         q.take(c.row);
@@ -799,6 +837,10 @@ void *create(obs_data_t *settings, obs_source_t *parent) {
                    "void streaming_media_request_status(string requestId, out "
                    "string status)",
                    Source::requestStatusProc, s);
+  proc_handler_add(proc,
+                   "void streaming_media_import(string urls, bool play, out "
+                   "string requestId)",
+                   Source::importProc, s);
   s->worker = std::thread([s] { s->run(); });
   s->update(settings);
   return s;
@@ -909,7 +951,7 @@ bool obs_module_load(void) {
   i.icon_type = OBS_ICON_TYPE_MEDIA;
   obs_register_source(&i);
   registerMediaDock(bundlePath(), managedPath());
-  blog(LOG_INFO, "[streaming-media] Loaded 0.5.1");
+  blog(LOG_INFO, "[streaming-media] Loaded 0.6.0");
   return true;
 }
 
