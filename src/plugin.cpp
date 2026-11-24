@@ -5,6 +5,7 @@
 #include "media-runtime.hpp"
 #include "media-websocket.hpp"
 #include "resolver.hpp"
+#include "runtime-update.hpp"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -49,11 +50,29 @@ struct Result {
   Request req;
   Media media;
 };
-static MediaRuntime runtime() {
+static QString bundlePath() {
   char *path = obs_module_file("runtime");
-  auto bundle = QString::fromUtf8(path ? path : "");
+  auto result = QString::fromUtf8(path ? path : "");
   bfree(path);
-  return findMediaRuntime(bundle);
+  return result;
+}
+static QString managedPath() {
+  char *path = obs_module_config_path("runtime");
+  auto result = QString::fromUtf8(path ? path : "");
+  bfree(path);
+  return result;
+}
+static MediaRuntime runtime() {
+  auto bundle = bundlePath();
+  auto engine = findMediaRuntime(bundle);
+  if (engine.bundled) {
+    auto updated = preferredRuntimeExecutable(bundle, managedPath());
+    if (!updated.isEmpty() && updated != engine.extractor) {
+      engine.extractor = updated;
+      engine.updated = true;
+    }
+  }
+  return engine;
 }
 struct Source {
   obs_source_t *parent = nullptr, *child = nullptr;
@@ -235,7 +254,10 @@ struct Source {
     QProcess p;
     p.setProgram(engine.extractor);
     blog(LOG_INFO, "[streaming-media] Media engine: %s (%s)",
-         engine.bundled ? "bundled" : "system", qPrintable(engine.engine));
+         engine.updated   ? "updated"
+         : engine.bundled ? "bundled"
+                          : "system",
+         qPrintable(engine.engine));
     p.setArguments(args);
     p.start();
     if (!p.waitForStarted(1500)) {
@@ -886,8 +908,8 @@ bool obs_module_load(void) {
   i.media_play_pause = pause;
   i.icon_type = OBS_ICON_TYPE_MEDIA;
   obs_register_source(&i);
-  registerMediaDock();
-  blog(LOG_INFO, "[streaming-media] Loaded 0.5.0");
+  registerMediaDock(bundlePath(), managedPath());
+  blog(LOG_INFO, "[streaming-media] Loaded 0.5.1");
   return true;
 }
 

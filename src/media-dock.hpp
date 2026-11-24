@@ -1,6 +1,7 @@
 #pragma once
-void registerMediaDock();
+#include <QString>
+void registerMediaDock(const QString &bundle, const QString &managed);
 void unregisterMediaDock();
-
 class QWidget;
-QWidget *createMediaDockWidget();
+QWidget *createMediaDockWidget(const QString &bundle = {},
+                               const QString &managed = {});

@@ -7,6 +7,7 @@
 struct MediaRuntime {
   QString extractor, js, engine;
   bool bundled = false;
+  bool updated = false;
   bool ready() const { return !extractor.isEmpty() && !js.isEmpty(); }
 };
 MediaRuntime findMediaRuntime(const QString &bundle,

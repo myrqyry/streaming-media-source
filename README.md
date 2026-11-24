@@ -37,9 +37,15 @@ configure with `-DSTREAMING_MEDIA_RUNTIME_DIR=` and supply an existing
 yt-dlp plus supported JavaScript engine. The install is local; no packages
 are installed globally. Runtime pins are intentionally explicit and
 downloaded assets are checked against recorded upstream SHA-256 digests.
-Runtime updates currently require preparing a new pinned bundle; an
-in-dock update mechanism is not implemented. Review third-party license
-and corresponding-source obligations before distributing the binaries.
+The dock's media engine menu offers **Check for extractor updates** and
+**Use bundled extractor**. Updates are fetched only on request from the
+official stable yt-dlp release, verified against the release asset SHA-256
+and size, and version-checked before activation. The updated executable
+is stored in the OBS plugin configuration directory; the original bundle
+remains untouched. The next resolution uses the new engine without an OBS
+restart. Use the bundled extractor to roll back. Deno remains pinned.
+See [third-party runtime notices](third-party/README.md) and the release
+checklist before distributing binaries.
 
 Restart OBS when convenient. In source properties, paste a YouTube URL and
 select maximum resolution, hardware decoding, playback speed and network

@@ -209,3 +209,23 @@ Local runtime size 131 MiB uncompressed, Linux x86_64 only. No binaries
 tracked; build/bundle-stage-path records tested stage. In-dock updater
 and full upstream binary redistribution compliance remain future work.
 No production install or restart, push or visibility change.
+
+## v0.5.1 — opt-in extractor updates
+Dock engine menu checks stable upstream yt-dlp release on request, validates
+exact asset URL, HTTPS redirect hosts, size, API SHA-256, and candidate
+--version before atomic activation. Versioned executables live in the OBS
+plugin configuration directory. Bundled original stays untouched; rollback
+clears active marker without removing running executable. New bundle
+version beats stale override. Bounded worker, cancellation at dock shutdown,
+cross-process update lock; no automatic background updates. Deno pinned.
+Real offscreen dock action test upgraded official 2026.10.26 to 2026.11.23,
+second check reported up-to-date, rollback restored original, destruction
+during check succeeded. Real staged updated-extractor playback with empty
+PATH and fresh HOME: 1080p video and mixer audio, seek, pause/resume, injected
+decoder interruption, fresh resolution and position restored, manual Stop
+cancelled second retry, queue preserved, 28870 concurrent dimension queries,
+clean teardown. CTest 8/8. Preserved exact upstream tagged license notices
+under third-party/ and staged with bundle. GPLv3+ standalone yt-dlp confirmed
+from upstream README; corresponding-source obligations and Deno dependency
+notices still need public distribution review. No public release, production
+install or push. Stage recorded in build/runtime-updater-stage-path.

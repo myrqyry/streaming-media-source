@@ -19,7 +19,10 @@ Before a first public release:
   Deno executables with SHA-256 verification. No external curl is required.
   Complete upstream binary redistribution notices, corresponding source
   obligations and package ABI review before uploading public artifacts.
-  Automatic in-app runtime updating is still a separate feature.
+  The opt-in dock updater is implemented for stable yt-dlp releases;
+  Deno remains pinned. Upstream license texts are included with local
+  staged bundles; public distribution still needs corresponding-source
+  compliance and the Deno dependency notice review.
 - Provide an installable Linux package with the supported OBS/Qt ABI and
   reproducible build instructions. Current development target is OBS 32.x
   native Linux, not Windows/macOS/Flatpak. Keep the source ID and install

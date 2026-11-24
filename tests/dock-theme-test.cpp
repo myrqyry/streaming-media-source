@@ -1,7 +1,11 @@
 #include "media-dock.hpp"
+#include "runtime-update.hpp"
+#include <QAction>
 #include <QApplication>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QFont>
 #include <QImage>
 #include <QLabel>
@@ -41,7 +45,9 @@ int main(int argc, char **argv) {
         .arg(tmp.filePath(name));
   };
   app.setStyleSheet(css("red.png"));
-  std::unique_ptr<QWidget> dock(createMediaDockWidget());
+  auto bundle = qEnvironmentVariable("SMOKE_UPDATE_BUNDLE");
+  auto managed = qEnvironmentVariable("SMOKE_UPDATE_MANAGED");
+  std::unique_ptr<QWidget> dock(createMediaDockWidget(bundle, managed));
   dock->resize(360, 430);
   dock->show();
   settle();
@@ -70,6 +76,40 @@ int main(int argc, char **argv) {
   dock->resize(240, 430);
   settle();
   check(thumb->width() <= previous, "compact thumbnail fits narrow dock");
+  if (!bundle.isEmpty() && !managed.isEmpty()) {
+    auto engine = dock->findChild<QLabel *>("media-engine-status");
+    auto update = dock->findChild<QAction *>("media-engine-check");
+    auto reset = dock->findChild<QAction *>("media-engine-reset");
+    auto menu = dock->findChild<QToolButton *>("media-engine-menu");
+    check(engine && update && reset && menu, "engine controls available");
+    auto wait = [&] {
+      QElapsedTimer elapsed;
+      elapsed.start();
+      while (!menu->isEnabled() && elapsed.elapsed() < 150000)
+        settle();
+      qInfo().noquote() << "ENGINE_RESULT" << engine->text();
+      check(menu->isEnabled(), "worker finished");
+    };
+    update->trigger();
+    wait();
+    check(engine->text().startsWith("Updated"),
+          "official release downloaded and activated");
+    auto version = activeRuntimeVersion(managed);
+    auto path = preferredRuntimeExecutable(bundle, managed);
+    check(!version.isEmpty() && QFileInfo(path).isExecutable(),
+          "managed extractor selected");
+    update->trigger();
+    wait();
+    check(engine->text().startsWith("Media engine up to date"),
+          "second check is a no-op");
+    reset->trigger();
+    check(activeRuntimeVersion(managed).isEmpty() && QFileInfo(path).exists(),
+          "rollback preserves immutable file");
+    qInfo().noquote() << "ENGINE_ROLLBACK" << engine->text();
+    update->trigger();
+    // Destroy during an explicit update; worker cancellation must be safe.
+    dock.reset();
+  }
   dock.reset();
   obs_shutdown();
 }

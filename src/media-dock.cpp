@@ -1,14 +1,17 @@
 #include "media-dock.hpp"
 #include "media-queue.hpp"
 #include "playlist-metadata.hpp"
+#include "runtime-update.hpp"
 #include <QApplication>
 #include <QBuffer>
 #include <QCache>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDir>
 #include <QDrag>
 #include <QDropEvent>
 #include <QEvent>
+#include <QFileInfo>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QImage>
@@ -16,6 +19,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -29,6 +33,7 @@
 #include <QSlider>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrlQuery>
@@ -228,6 +233,52 @@ struct CachedPlaylistItem {
 };
 class MediaDock : public QWidget {
   QVBoxLayout *mainLayout = nullptr;
+  QString runtimeBundle, runtimeManaged;
+  QLabel *engineStatus = nullptr;
+  QToolButton *engineMenu = nullptr;
+  QThread *updateWorker = nullptr;
+  std::shared_ptr<QString> updateResult;
+  void refreshEngine() {
+    if (!updateWorker && engineStatus)
+      engineStatus->setText(
+          runtimeDisplayVersion(runtimeBundle, runtimeManaged));
+  }
+  void checkEngine() {
+    if (updateWorker || runtimeBundle.isEmpty() || runtimeManaged.isEmpty())
+      return;
+    engineMenu->setEnabled(false);
+    engineStatus->setText("Checking media engine…");
+    updateResult = std::make_shared<QString>();
+    auto result = updateResult;
+    auto bundle = runtimeBundle, root = runtimeManaged;
+    updateWorker = QThread::create([result, bundle, root] {
+      *result = updateMediaRuntime(bundle, root, [] {
+        return QThread::currentThread()->isInterruptionRequested();
+      });
+    });
+    auto worker = updateWorker;
+    connect(worker, &QThread::finished, this, [this, result, worker] {
+      if (updateWorker != worker)
+        return;
+      updateWorker = nullptr;
+      worker->deleteLater();
+      engineStatus->setText(*result);
+      engineStatus->setToolTip(*result);
+      engineMenu->setEnabled(true);
+    });
+    updateWorker->start();
+  }
+  void stopEngineUpdate() {
+    if (!updateWorker)
+      return;
+    auto worker = updateWorker;
+    updateWorker = nullptr;
+    disconnect(worker, nullptr, this, nullptr);
+    worker->requestInterruption();
+    worker->wait();
+    delete worker;
+  }
+
   QImage previewImage;
   bool themeRefreshPending = false, themeReady = false;
   QComboBox *sources;
@@ -663,7 +714,8 @@ class MediaDock : public QWidget {
   }
 
 public:
-  MediaDock() {
+  MediaDock(const QString &bundle, const QString &managed)
+      : runtimeBundle(bundle), runtimeManaged(managed) {
     setObjectName("streaming-media-controls");
     auto layout = new QVBoxLayout(this);
     mainLayout = layout;
@@ -773,6 +825,44 @@ public:
       edits->addWidget(b);
     edits->addStretch();
     layout->addLayout(edits);
+    auto engineRow = new QHBoxLayout;
+    engineStatus = new QLabel(this);
+    engineStatus->setObjectName("media-engine-status");
+    engineStatus->setProperty("class", "text-muted");
+    engineStatus->setTextFormat(Qt::PlainText);
+    engineStatus->setWordWrap(true);
+    engineStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    engineMenu = tool(QStyle::SP_BrowserReload, "Media engine options",
+                      "icon-media-restart");
+    engineMenu->setObjectName("media-engine-menu");
+    auto menu = new QMenu(engineMenu);
+    auto check = menu->addAction("Check for extractor updates");
+    check->setObjectName("media-engine-check");
+    auto reset = menu->addAction("Use bundled extractor");
+    reset->setObjectName("media-engine-reset");
+    connect(check, &QAction::triggered, this, [this] { checkEngine(); });
+    connect(reset, &QAction::triggered, this, [this] {
+      if (updateWorker)
+        return;
+      if (clearRuntimeOverride(runtimeManaged)) {
+        refreshEngine();
+        engineStatus->setToolTip(
+            "Bundled extractor will be used for the next resolution");
+      } else
+        engineStatus->setText("Could not restore bundled extractor");
+    });
+    connect(menu, &QMenu::aboutToShow, this, [this, check, reset] {
+      check->setEnabled(!runtimeBundle.isEmpty() && !runtimeManaged.isEmpty() &&
+                        !updateWorker);
+      reset->setEnabled(!activeRuntimeVersion(runtimeManaged).isEmpty() &&
+                        !updateWorker);
+    });
+    engineMenu->setMenu(menu);
+    engineMenu->setPopupMode(QToolButton::InstantPopup);
+    engineRow->addWidget(engineStatus, 1);
+    engineRow->addWidget(engineMenu);
+    layout->addLayout(engineRow);
+    refreshEngine();
     network = new QNetworkAccessManager(this);
     timer = new QTimer(this);
     timer->setInterval(250);
@@ -859,7 +949,9 @@ public:
     refreshCount = 0;
     refresh();
   }
+  ~MediaDock() override { stopEngineUpdate(); }
   void shutdown() {
+    stopEngineUpdate();
     shuttingDown = true;
     timer->stop();
     if (playlistReply)
@@ -880,12 +972,15 @@ void frontendEvent(enum obs_frontend_event event, void *) {
   }
 }
 } // namespace
-QWidget *createMediaDockWidget() { return new MediaDock; }
-void registerMediaDock() {
+QWidget *createMediaDockWidget(const QString &bundle, const QString &managed) {
+  return new MediaDock(bundle, managed);
+}
+void registerMediaDock(const QString &bundle, const QString &managed) {
   if (!qobject_cast<QApplication *>(QCoreApplication::instance()) ||
       !obs_frontend_get_main_window())
     return;
-  auto widget = static_cast<MediaDock *>(createMediaDockWidget());
+  auto widget =
+      static_cast<MediaDock *>(createMediaDockWidget(bundle, managed));
   if (!obs_frontend_add_dock_by_id(dockId, "Streaming Media", widget)) {
     delete widget;
     return;

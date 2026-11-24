@@ -123,7 +123,10 @@ int main(int argc, char **argv) {
   QTemporaryDir tmp;
   if (argc != 3)
     return 2;
-  if (!obs_startup("en-US", tmp.path().toUtf8().constData(), nullptr))
+  if (!obs_startup(
+          "en-US",
+          qPrintable(qEnvironmentVariable("SMOKE_MODULE_CONFIG", tmp.path())),
+          nullptr))
     return 2;
   obs_set_ui_task_handler(queueUi);
   obs_audio_info ai{48000, SPEAKERS_STEREO};

@@ -66,6 +66,7 @@ def main():
         for name in ("yt-dlp", "deno"):
             (stage / name).chmod(0o755)
             os.replace(stage / name, args.output / name)
+    (args.output / "yt-dlp-version.txt").write_text("2026.11.23\n")
     (args.output / "RUNTIME-NOTICE.txt").write_text(
         "Pinned upstream executables for local testing.\n"
         "yt-dlp 2026.11.23: https://github.com/yt-dlp/yt-dlp\n"
