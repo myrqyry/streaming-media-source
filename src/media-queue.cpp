@@ -61,3 +61,21 @@ bool reachedVodEnd(qint64 position, qint64 duration, bool live) {
   const auto tolerance = std::clamp<qint64>(duration / 20, 250, 3000);
   return position >= duration - tolerance;
 }
+
+QString MediaQueue::appendRequest(const QString &url, const QString &current,
+                                  bool enabled) {
+  if (!enabled)
+    return "disabled";
+  auto id = videoId(url.trimmed());
+  if (url.size() > 2048 || id.isEmpty())
+    return "invalid_url";
+  if (videoId(current) == id)
+    return "duplicate";
+  for (const auto &item : urls)
+    if (videoId(item) == id)
+      return "duplicate";
+  if (urls.size() >= 100)
+    return "queue_full";
+  return append("https://www.youtube.com/watch?v=" + id) ? "queued"
+                                                         : "invalid_url";
+}

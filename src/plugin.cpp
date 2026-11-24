@@ -1,5 +1,6 @@
 #include "media-dock.hpp"
 #include "media-queue.hpp"
+#include "media-websocket.hpp"
 #include "resolver.hpp"
 #include <QDir>
 #include <QFile>
@@ -11,6 +12,7 @@
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QUuid>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -36,6 +38,7 @@ struct Request {
 struct QueueCommand {
   QString op, url;
   int row = -1, target = -1;
+  QString requestId;
 };
 struct Result {
   Request req;
@@ -74,6 +77,8 @@ struct Source {
   std::thread worker;
   QString title, error;
   std::deque<QueueCommand> commands;
+  QHash<QString, QString> requestResults;
+  QStringList requestOrder;
   enum obs_media_state lastChildState = OBS_MEDIA_STATE_NONE;
   bool played = false, sessionLive = false;
   int64_t lastPosition = 0, lastDuration = 0;
@@ -314,6 +319,50 @@ struct Source {
     cmd.target = int(calldata_int(call, "target"));
     s->enqueue(std::move(cmd));
   }
+  static void submitProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    auto url = QString::fromUtf8(calldata_string(call, "url")).trimmed();
+    auto settings = obs_source_get_settings(s->parent);
+    bool enabled = obs_data_get_bool(settings, "remote_requests");
+    obs_data_release(settings);
+    QString status;
+    if (!enabled)
+      status = "disabled";
+    else if (url.size() > 2048 || videoId(url).isEmpty())
+      status = "invalid_url";
+    else {
+      std::lock_guard<std::mutex> l(s->mutex);
+      if (s->closing || s->commands.size() >= 64)
+        status = "busy";
+      else {
+        auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        while (s->requestOrder.size() >= 256) {
+          auto it =
+              std::find_if(s->requestOrder.begin(), s->requestOrder.end(),
+                           [&](const QString &k) {
+                             return s->requestResults.value(k) != "pending";
+                           });
+          if (it == s->requestOrder.end())
+            break;
+          s->requestResults.remove(*it);
+          s->requestOrder.erase(it);
+        }
+        s->requestOrder.append(id);
+        s->requestResults.insert(id, "pending");
+        s->commands.push_back({"remote_append", url, -1, -1, id});
+        calldata_set_string(call, "requestId", qPrintable(id));
+        status = "pending";
+      }
+    }
+    calldata_set_string(call, "status", qPrintable(status));
+  }
+  static void requestStatusProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    auto id = QString::fromUtf8(calldata_string(call, "requestId"));
+    std::lock_guard<std::mutex> l(s->mutex);
+    auto status = s->requestResults.value(id, "unknown_request");
+    calldata_set_string(call, "status", qPrintable(status));
+  }
   static void statusProc(void *data, calldata_t *call) {
     auto s = static_cast<Source *>(data);
     std::lock_guard<std::mutex> l(s->mutex);
@@ -364,9 +413,11 @@ struct Source {
     auto original = q.serialize();
     QString url = QString::fromUtf8(obs_data_get_string(settings, "url"));
     bool autoAdvance = obs_data_get_bool(settings, "auto_advance");
+    bool remoteEnabled = obs_data_get_bool(settings, "remote_requests");
     obs_data_release(settings);
     auto initialUrl = url;
     bool initialAuto = autoAdvance, load = false;
+    QList<QPair<QString, QString>> receipts;
     // Commands are serialized on the OBS video thread; stale indexed actions
     // cannot silently target another entry after a queue change.
     for (const auto &c : local) {
@@ -374,7 +425,10 @@ struct Source {
         return c.row >= 0 && c.row < q.items().size() &&
                q.items()[c.row] == c.url;
       };
-      if (c.op == "append")
+      if (c.op == "remote_append")
+        receipts.append(
+            {c.requestId, q.appendRequest(c.url, url, remoteEnabled)});
+      else if (c.op == "append")
         q.append(c.url);
       else if (c.op == "remove" && matches())
         q.take(c.row);
@@ -409,6 +463,11 @@ struct Source {
       obs_data_release(patch);
       if (load && url == initialUrl)
         reload();
+    }
+    if (!receipts.isEmpty()) {
+      std::lock_guard<std::mutex> l(mutex);
+      for (const auto &receipt : receipts)
+        requestResults.insert(receipt.first, receipt.second);
     }
   }
   void tick() {
@@ -543,6 +602,7 @@ void defaults(obs_data_t *s) {
   obs_data_set_default_bool(s, "restart", false);
   obs_data_set_default_string(s, "queue", "[]");
   obs_data_set_default_bool(s, "auto_advance", false);
+  obs_data_set_default_bool(s, "remote_requests", false);
 }
 obs_properties_t *properties(void *) {
   auto p = obs_properties_create();
@@ -562,6 +622,8 @@ obs_properties_t *properties(void *) {
       obs_properties_add_int_slider(p, "buffer", "Network buffer", 0, 16, 1);
   obs_property_int_set_suffix(buffer, " MB");
   obs_properties_add_bool(p, "restart", "Restart on scene activation");
+  obs_properties_add_bool(p, "remote_requests",
+                          "Accept WebSocket video requests");
   return p;
 }
 void *create(obs_data_t *settings, obs_source_t *parent) {
@@ -593,6 +655,14 @@ void *create(obs_data_t *settings, obs_source_t *parent) {
   proc_handler_add(
       proc, "void streaming_media_status(out string title, out string error)",
       Source::statusProc, s);
+  proc_handler_add(proc,
+                   "void streaming_media_submit(string url, out string "
+                   "requestId, out string status)",
+                   Source::submitProc, s);
+  proc_handler_add(proc,
+                   "void streaming_media_request_status(string requestId, out "
+                   "string status)",
+                   Source::requestStatusProc, s);
   s->worker = std::thread([s] { s->run(); });
   s->update(settings);
   return s;
@@ -701,8 +771,9 @@ bool obs_module_load(void) {
   i.icon_type = OBS_ICON_TYPE_MEDIA;
   obs_register_source(&i);
   registerMediaDock();
-  blog(LOG_INFO, "[streaming-media] Loaded 0.2.0");
+  blog(LOG_INFO, "[streaming-media] Loaded 0.3.0");
   return true;
 }
 
+void obs_module_post_load(void) { registerMediaWebsocket(); }
 void obs_module_unload(void) { unregisterMediaDock(); }

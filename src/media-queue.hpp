@@ -8,6 +8,8 @@ public:
   QString serialize() const;
   const QStringList &items() const { return urls; }
   bool append(const QString &url);
+  QString appendRequest(const QString &url, const QString &current,
+                        bool enabled);
   bool move(int from, int to);
   QString take(int index);
 };

@@ -38,4 +38,25 @@ int main(int argc, char **argv) {
         "live stream is not completed VOD");
   check(!reachedVodEnd(0, 2000, false),
         "short video not completed before progress");
+  MediaQueue requests;
+  check(requests.appendRequest(a, {}, false) == "disabled", "opt-in required");
+  check(requests.appendRequest("https://evil.test/watch?v=x", {}, true) ==
+            "invalid_url",
+        "reject remote URL");
+  check(requests.appendRequest(a, b, true) == "queued", "valid request");
+  check(requests.items().first() ==
+            "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+        "canonical URL");
+  check(
+      requests.appendRequest("https://www.youtube.com/watch?v=aqz-KE-bpKQ&t=4",
+                             {}, true) == "duplicate",
+      "reject equivalent duplicate");
+  check(requests.appendRequest(b, b, true) == "duplicate",
+        "reject current video");
+  check(requests.appendRequest(c, {}, true) == "queued",
+        "second valid request");
+  MediaQueue full;
+  for (int i = 0; i < 100; i++)
+    full.append(a);
+  check(full.appendRequest(c, {}, true) == "queue_full", "bounded queue");
 }

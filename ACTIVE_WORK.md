@@ -37,3 +37,20 @@ not the dock timer; original URLs only in persisted settings; validated
 thumbnail ID and bounded fetch; explicit opt-in auto advance.
 Remaining: automatic bounded fresh-URL recovery with resume, richer queue
 metadata/thumbnail cards, hardware decode and multi-source qualification.
+
+## 0.3.0 — WebSocket request intake (2026-11-23)
+Vendor streaming-media registered through obs_module_post_load, using the
+existing OBS WebSocket 5.7.4 RPC 1 server, not a second listener. Per-source
+remote_requests opt-in defaults false. SubmitVideo takes an explicit source
+UUID and a YouTube video URL; source tick owns admission and persists canonical
+queue entries. Bounded receipts distinguish pending/queued/rejected; remote
+admission rejects duplicates including current video, invalid URLs and full
+queues. No immediate-play or arbitrary command endpoint. Real authenticated
+WebSocket smoke against separate OBS 32.2 profile passed source discovery,
+disabled default, wrong target, invalid URL, pending-to-queued receipt,
+duplicate, queue snapshot, no autoplay, and disable. CTest 2/2. Isolated
+test instance stopped. Existing user OBS configuration and installed v0.1.0
+remain untouched. Next: Chatbus adapter/moderation and request attribution
+if desired, automatic stream recovery, richer queue metadata, hardware
+decode and multi-source qualification. No claims of viewer authentication
+or public request server.
