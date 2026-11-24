@@ -272,3 +272,25 @@ transport, thumbnails, reorder, EOF/auto-next, queue edit/stop preservation,
 50741 dimension queries and teardown. Mixed-link menu and source-change
 cancellation not separately exercised in live smoke. No production install
 or push. Concurrent CI documentation files outside this slice left untouched.
+
+## Linux OBS32 CI and README consolidation (2026-11-24)
+
+- Reuse the source-pinned SDK approach from Framerot, strict native testing
+  and install-layout verification from Timeline, and product-first README
+  conventions established across the OBS plugin portfolio. The initial
+  Aftermarket and Streaming Media pilots share identical self-contained
+  verification helpers; do not introduce a remote shared-workflow dependency
+  until the hosted jobs qualify.
+- Downloaded and SHA-256-verified OBS 32.2.0, built its SDK locally in an
+  isolated directory, and clean-built committed source 0dc4ed0 plus the
+  scoped CI changes. All 9 native CTest cases passed; no skips.
+  Staged package contained only the expected native module; no embedded
+  RPATH/RUNPATH or unresolved shared libraries, and both libobs libraries
+  resolved to the freshly built SDK. Checksum and extracted bytes verified.
+  Archive SHA-256: 8ab4f6c45a068f030f5f9fe852de6728c8a708f68575194206b479538b7c948e.
+  Evidence: /tmp/obs-ci-pilots.Kk7s56/streaming-current-ci.log.
+- README relative link regression, shell syntax and YAML structure passed.
+  Hosted GitHub Actions runs are not yet established; no push, release,
+  source export, production installation, or OBS restart. Streaming Media's
+  CI deliberately excludes bundled yt-dlp/Deno and live network playback;
+  release licensing and wider platform qualification remain separate gates.

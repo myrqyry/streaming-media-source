@@ -256,7 +256,7 @@ the child's own output mixer is disabled to avoid double routing.
 
 The [Linux CI workflow](.github/workflows/ci.yml) uses a pinned OBS 32.2.0
 SDK and the matching obs-websocket API header. It runs the deterministic
-native CTest suite (at least eight tests, no skips), checks README links,
+native CTest suite (at least nine tests, no skips), checks README links,
 and validates a module-only Linux install archive and checksum.
 The CI path deliberately does not download or bundle yt-dlp/Deno, run live
 YouTube playback, or upload release binaries.
@@ -264,7 +264,7 @@ YouTube playback, or upload release binaries.
 | Target | Verification boundary |
 | --- | --- |
 | Linux x86_64 / OBS 32.2 / Qt 6.4.2 | Local native tests, isolated real playback and bundled package smoke |
-| Ubuntu 24.04 / pinned OBS 32.2 SDK | CI configured; hosted result pending |
+| Ubuntu 24.04 / pinned OBS 32.2 SDK | Local CI driver passed; hosted result pending |
 | Windows, macOS, Flatpak, other OBS majors | Not qualified |
 
 See the [CI guide](docs/ci.md) for local reproduction. The optional real
