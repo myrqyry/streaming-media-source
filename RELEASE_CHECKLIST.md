@@ -1,15 +1,17 @@
 # Public release readiness
 
-The GitHub repository is currently private. Changing visibility, publishing
-a release or rewriting history is a separate owner decision.
+The repository is now public. Publishing release binaries or rewriting
+history remains a separate owner decision.
 
 Before a first public release:
 
-- Select a license compatible with the linked OBS Studio GPL code and
-  document the license/attribution of included third-party material. OBS
-  ships GPLv2 and many of its source headers permit later versions.
-  Confirm the applicable terms before distributing the plugin; no license
-  has been selected for this repository yet.
+- Project license prepared locally: GPL-3.0-or-later, using the checked
+  OBS and obs-websocket GPLv2-or-later API headers and compatible Qt
+  open-source licensing. See [licensing and distribution](docs/licensing.md).
+  Owner approval and publication of the license are separate from preparing
+  this local checkpoint. Verify source provenance before release.
+  Provide corresponding source, exact dependency versions, build scripts
+  and license notices with any public binary distribution.
 - Review all reachable Git history, not just HEAD, for private URLs,
   credentials, local usernames, machine identifiers, incident logs and
   project-specific context. Prior scans checked common credential patterns
@@ -38,13 +40,13 @@ Before a first public release:
 - v0.6.0 playlist import and normal playback smoke passed with the bundled
   engine; 9 native CTest cases passed. Mixed-link choice and source-change
   cancellation were not independently exercised in the live smoke.
-  The pinned OBS32 local CI driver passed; hosted CI is currently blocked
-  by an Actions budget. No hosted build/test steps ran.
+  The pinned OBS32 local CI driver passed; hosted retry completed
+  successfully after the repository became public.
 - Describe direct public-media playback accurately; do not promise
   universally ad-free video, access to restricted media, or supported
   providers/platforms that have not been verified. No account credentials
   are needed for supported public VOD playback.
 
-A private repository can contain development history that would be
-inappropriate for a public issue or release. The repository owner should
-approve publication after reviewing these points.
+The repository was previously private and its existing history is now
+public. Review any historical development notes for sensitive information.
+No release binaries should be published until the remaining gates are met.

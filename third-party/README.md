@@ -1,7 +1,8 @@
 # Bundled runtime provenance
 
 The plugin launches separate upstream executables. These files are their
-upstream notices, not a declaration of the plugin's own license.
+upstream notices, not a declaration of the plugin's own license. See
+[project licensing and distribution](https://github.com/myrqyry/streaming-media-source/blob/master/docs/licensing.md).
 
 - yt-dlp 2026.11.23:
   [tagged source](https://github.com/yt-dlp/yt-dlp/tree/2026.11.23),

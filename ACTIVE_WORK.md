@@ -294,3 +294,26 @@ or push. Concurrent CI documentation files outside this slice left untouched.
   source export, production installation, or OBS restart. Streaming Media's
   CI deliberately excludes bundled yt-dlp/Deno and live network playback;
   release licensing and wider platform qualification remain separate gates.
+
+## License preparation and public CI status
+Repository visibility confirmed PUBLIC. Previously budget-blocked Linux
+Actions run 45412791743 attempt 2 completed successfully at ff306cd.
+Owner asked to determine licensing; Desktop Commander invocation taken
+as permission to prepare a local GPL-3.0-or-later adoption checkpoint,
+not explicit permission to publish the license. Full GPLv3 text copied
+verbatim from the installed common license, README selects version 3 or
+later for original project work, third-party terms preserved separately.
+Checked OBS/libobs and pinned obs-websocket GPLv2-or-later headers; Qt
+GPLv3 route available. docs/licensing.md records source offer, provenance,
+dependency boundaries and preferred module-only distribution plus
+consented verified first-run upstream executable downloads. First-run
+provisioning and cross-platform selection are not implemented. Bundled
+third-party source/notice obligations and exact linked dependency review
+remain public binary release gates; no binary publication.
+CMake installs license and guide in data/licenses. Before change,
+staged installation lacked the license; after, both files match the
+source. CTest 9/9. Fresh pinned OBS32 SDK verifier exit 0, 9 tests,
+exact module-plus-notices allowlist, dependency and archive checksum
+validation; both extracted notices match originals. README links passed.
+No production install, push, or release. Await owner confirmation before
+publishing the prepared license checkpoint.

@@ -273,19 +273,20 @@ the child's own output mixer is disabled to avoid double routing.
 The [Linux CI workflow](.github/workflows/ci.yml) uses a pinned OBS 32.2.0
 SDK and the matching obs-websocket API header. It runs the deterministic
 native CTest suite (at least nine tests, no skips), checks README links,
-and validates a module-only Linux install archive and checksum.
+and validates a Linux install archive containing only the module and project
+license notices, plus its checksum.
 The CI path deliberately does not download or bundle yt-dlp/Deno, run live
 YouTube playback, or upload release binaries.
 
 | Target | Verification boundary |
 | --- | --- |
 | Linux x86_64 / OBS 32.2 / Qt 6.4.2 | Local native tests, isolated real playback and bundled package smoke |
-| Ubuntu 24.04 / pinned OBS 32.2 SDK | Local CI driver passed; hosted run blocked by Actions budget |
+| Ubuntu 24.04 / pinned OBS 32.2 SDK | Local and GitHub-hosted CI driver passed |
 | Windows, macOS, Flatpak, other OBS majors | Not qualified |
 
-The first [hosted run](https://github.com/myrqyry/streaming-media-source/actions/runs/45404314210)
-was prevented from starting by the GitHub Actions budget; no build or test
-steps executed. See the [CI guide](docs/ci.md) for local reproduction. The optional real
+The first hosted attempt was budget-blocked while the repository was private.
+After the owner made the repository public, the [retried hosted run](https://github.com/myrqyry/streaming-media-source/actions/runs/45412791743)
+completed successfully. See the [CI guide](docs/ci.md) for local reproduction. The optional real
 playback smoke below is deliberately separate from deterministic CI.
 
 
@@ -345,6 +346,13 @@ of the plugin. Current verified scope is public VOD, native Linux OBS,
 software decoding; hardware decoding is an option but is not yet qualified.
 
 See ACTIVE_WORK.md for exact runtime evidence and remaining work.
+
+## License
+
+Original project code and documentation: [GPL-3.0-or-later](LICENSE).
+Third-party components retain their own licenses. See the
+[licensing and distribution guide](docs/licensing.md) and
+[third-party runtime notices](third-party/README.md).
 
 ## Reference
 

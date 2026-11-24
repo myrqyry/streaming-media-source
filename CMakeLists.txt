@@ -19,6 +19,7 @@ target_include_directories(obs-streaming-media PRIVATE ${OBS_WEBSOCKET_INCLUDE_D
 target_link_libraries(obs-streaming-media PRIVATE OBS::libobs OBS::obs-frontend-api Qt6::Widgets Qt6::Network stream-resolver runtime-update)
 set_target_properties(obs-streaming-media PROPERTIES PREFIX "")
 install(TARGETS obs-streaming-media LIBRARY DESTINATION bin/64bit)
+install(FILES LICENSE docs/licensing.md DESTINATION data/licenses)
 set(STREAMING_MEDIA_RUNTIME_DIR "" CACHE PATH "Prepared standalone media runtime directory")
 if(STREAMING_MEDIA_RUNTIME_DIR)
   install(PROGRAMS "${STREAMING_MEDIA_RUNTIME_DIR}/yt-dlp" "${STREAMING_MEDIA_RUNTIME_DIR}/deno" DESTINATION data/runtime)

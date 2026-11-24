@@ -16,7 +16,7 @@ versioned workflow only after the pilots qualify.
 3. Configure a clean Release build with explicit SDK CMake package paths.
 4. Require the native CTest suite to register at least the baseline number
    of tests and pass under Xvfb/software rendering without skipped tests.
-5. Stage the module via CMake install, enforce the exact module-only
+5. Stage the module via CMake install, enforce the exact native module and project license notice
    payload, reject embedded runtime search paths, and check shared libraries.
 6. Create a temporary archive, verify its SHA-256, extract it separately,
    and compare the extracted module to the staged module.
@@ -48,9 +48,10 @@ from source. A clean Release build of the committed source plus this
 CI change passed all 9 CTest cases, the module-only package allowlist,
 shared-library checks, SHA-256 verification and extraction comparison.
 The first [GitHub-hosted run](https://github.com/myrqyry/streaming-media-source/actions/runs/45404314210)
-was marked failed before any steps ran. GitHub reported that an Actions
-budget prevented the job from starting. Hosted SDK/build/test execution
-remains unqualified until the budget permits a run.
+was marked failed before any steps ran because of the Actions budget.
+After the repository became public, [attempt 2 of the later run](https://github.com/myrqyry/streaming-media-source/actions/runs/45412791743)
+completed successfully. This qualifies the existing Linux SDK/build/test
+workflow, not Windows, macOS or the live playback paths.
 
 The temporary archives are intentionally not release packages. Public
 redistribution requires the owner to establish licensing, provenance and

@@ -59,9 +59,15 @@ PY
 cmake --install "$build" --prefix "$stage/$module"
 binary="$stage/$module/bin/64bit/$module.so"
 test -s "$binary"
-# Exact payload allowlist: no configuration, source, bundled runtimes,
+# Exact payload allowlist: native module and required project notices only; no configuration, source, bundled runtimes,
 # or build outputs accidentally enter this preliminary module-only package.
-test "$(find "$stage" -mindepth 1 ! -type d -printf '%P\n')" = "$module/bin/64bit/$module.so"
+expected="$module/bin/64bit/$module.so"
+if [[ "$module" == obs-streaming-media ]]; then
+  expected=$(printf '%s\n' "$expected" "$module/data/licenses/LICENSE" "$module/data/licenses/licensing.md" | LC_ALL=C sort)
+  cmp "$root/LICENSE" "$stage/$module/data/licenses/LICENSE"
+  cmp "$root/docs/licensing.md" "$stage/$module/data/licenses/licensing.md"
+fi
+test "$(find "$stage" -mindepth 1 ! -type d -printf '%P\n' | LC_ALL=C sort)" = "$expected"
 if readelf -d "$binary" | grep -E '(RPATH|RUNPATH)' ; then
   echo "Unexpected embedded runtime search path" >&2
   exit 1
