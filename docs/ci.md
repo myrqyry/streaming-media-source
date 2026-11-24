@@ -57,3 +57,35 @@ The temporary archives are intentionally not release packages. Public
 redistribution requires the owner to establish licensing, provenance and
 platform qualification first. Never publish local logs, scenes, models,
 private development notes, or third-party executables by default.
+
+## Windows and macOS qualification
+
+The native qualification matrix adds Windows x64 (Visual Studio 2026),
+macOS Apple Silicon and macOS Intel (Xcode) to the existing Linux job.
+It uses the same checksum-pinned OBS 32.2.0 source archive and WebSocket
+API header; OBS's own dependency bootstrap verifies the matching Qt and
+obs-deps archives specified in its CMakePresets.json.
+
+Run on a matching native host with Python 3.12+, CMake and the appropriate
+compiler and SDK installed:
+
+    python .github/scripts/verify-native.py <new-empty-work-directory>
+
+The job builds the OBS development SDK, builds the plugin and runs all
+nine deterministic regression executables. The Linux-only updater's
+filesystem activation tests are only applicable on Linux; its release
+metadata validation is tested on all platforms. The live YouTube/X11
+harness remains Linux-only.
+
+Windows stages a per-plugin folder with bin/64bit/obs-streaming-media.dll
+and data/licenses. macOS stages obs-streaming-media.plugin with the native
+Mach-O binary, bundle metadata and license resources. The jobs validate
+architecture, installed contents, archive integrity and SHA-256. macOS
+uses an ad-hoc signature for test purposes, not Developer ID notarization.
+No yt-dlp or Deno executables, runtime dependency DLLs, or third-party
+frameworks are copied into these packages.
+
+The new jobs are qualification in progress, not a support announcement.
+Neither CI test archives nor release binaries are uploaded. Actual OBS
+load, playback, audio, playlist imports, and clean teardown on the target
+platforms remain necessary before claiming production support.
