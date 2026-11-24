@@ -1,3 +1,4 @@
+#include "audio-handoff.hpp"
 #include "media-dock.hpp"
 #include "media-queue.hpp"
 #include "media-websocket.hpp"
@@ -68,6 +69,10 @@ struct Source {
   std::atomic<bool> closing{false}, accept{false}, loading{false},
       failed{false}, finished{false};
   std::atomic<int64_t> finalDuration{0};
+  std::atomic<uint32_t> videoWidth{0}, videoHeight{0};
+  std::atomic<bool> decoderEnded{false}, decoderUpdated{false};
+  bool waitingDecoder = false;
+  std::unique_ptr<AudioHandoff> audioHandoff;
   std::atomic<uint64_t> epoch{0};
   std::mutex mutex;
   std::condition_variable cv;
@@ -81,7 +86,8 @@ struct Source {
   QStringList requestOrder;
   enum obs_media_state lastChildState = OBS_MEDIA_STATE_NONE;
   bool played = false, sessionLive = false;
-  int64_t lastPosition = 0, lastDuration = 0;
+  VodProgress progress;
+  int64_t lastDuration = 0;
   explicit Source(obs_source_t *s)
       : parent(s), temp(QDir::tempPath() + "/obs-streaming-media-XXXXXX") {}
   ~Source() {
@@ -89,14 +95,29 @@ struct Source {
     closing = true;
     epoch++;
     cv.notify_all();
-    if (child)
+    if (child) {
+      signal_handler_disconnect(obs_source_get_signal_handler(child),
+                                "media_ended", childEnded, this);
+      signal_handler_disconnect(obs_source_get_signal_handler(child), "update",
+                                childUpdated, this);
       obs_source_remove_audio_capture_callback(child, audio, this);
+    }
+    if (audioHandoff)
+      audioHandoff->stop();
     if (worker.joinable())
       worker.join();
     if (child) {
       obs_source_remove_active_child(parent, child);
       obs_source_release(child);
     }
+  }
+  static void childUpdated(void *data, calldata_t *) {
+    static_cast<Source *>(data)->decoderUpdated = true;
+  }
+  static void childEnded(void *data, calldata_t *) {
+    auto s = static_cast<Source *>(data);
+    if (s->accept)
+      s->decoderEnded = true;
   }
   static void audio(void *data, obs_source_t *, const struct audio_data *a,
                     bool muted) {
@@ -106,15 +127,24 @@ struct Source {
     obs_audio_info info{};
     if (!obs_get_audio_info(&info))
       return;
+    auto gen = s->epoch.load();
+    if (s->accept && s->audioHandoff)
+      s->audioHandoff->push(a->data, a->frames, a->timestamp,
+                            info.samples_per_sec, info.speakers, gen);
+  }
+  void forwardAudio(const AudioPacket &p) {
+    if (closing || !accept || p.generation != epoch)
+      return;
     obs_source_audio out{};
-    out.frames = a->frames;
-    out.timestamp = a->timestamp;
-    out.samples_per_sec = info.samples_per_sec;
-    out.speakers = info.speakers;
+    out.frames = p.frames;
+    out.timestamp = p.timestamp;
+    out.samples_per_sec = p.rate;
+    out.speakers = p.speakers;
     out.format = AUDIO_FORMAT_FLOAT_PLANAR;
-    for (size_t i = 0; i < MAX_AV_PLANES; i++)
-      out.data[i] = a->data[i];
-    obs_source_output_audio(s->parent, &out);
+    auto channels = get_audio_channels(p.speakers);
+    for (size_t i = 0; i < channels; ++i)
+      out.data[i] = reinterpret_cast<const uint8_t *>(p.planes[i].data());
+    obs_source_output_audio(parent, &out);
   }
   void clearChild() {
     if (!child)
@@ -129,13 +159,20 @@ struct Source {
     obs_data_release(blank);
   }
   void cancel() {
-    epoch++;
     accept = false;
+    auto gen = ++epoch;
+    if (audioHandoff)
+      audioHandoff->reset(gen);
+    decoderEnded = false;
+    decoderUpdated = false;
+    waitingDecoder = false;
+    videoWidth = 0;
+    videoHeight = 0;
     loading = false;
     failed = false;
     finished = false;
     finalDuration = 0;
-    lastPosition = 0;
+    progress.reset();
     lastDuration = 0;
     played = false;
     lastChildState = OBS_MEDIA_STATE_NONE;
@@ -158,6 +195,8 @@ struct Source {
       return;
     }
     req.id = ++epoch;
+    if (audioHandoff)
+      audioHandoff->reset(req.id);
     loading = true;
     {
       std::lock_guard<std::mutex> l(mutex);
@@ -368,6 +407,8 @@ struct Source {
     std::lock_guard<std::mutex> l(s->mutex);
     calldata_set_string(call, "title", qPrintable(s->title));
     calldata_set_string(call, "error", qPrintable(s->error));
+    calldata_set_int(call, "width", s->videoWidth.load());
+    calldata_set_int(call, "height", s->videoHeight.load());
   }
   void processQueue() {
     std::deque<QueueCommand> local;
@@ -377,23 +418,34 @@ struct Source {
     }
     bool ended = false;
     if (accept) {
+      videoWidth = obs_source_get_base_width(child);
+      videoHeight = obs_source_get_base_height(child);
       auto st = obs_source_media_get_state(child);
       auto pos = obs_source_media_get_time(child),
            dur = obs_source_media_get_duration(child);
+      bool endSignal = decoderEnded.exchange(false);
       if (dur > 0)
         lastDuration = dur;
-      if (pos > 0)
-        lastPosition = pos;
+      if (pos > 0 && !endSignal && st != OBS_MEDIA_STATE_ENDED &&
+          st != OBS_MEDIA_STATE_ERROR)
+        progress.observe(pos);
       if (st == OBS_MEDIA_STATE_PLAYING && !played && pos > 0 &&
-          obs_source_get_width(child) > 0) {
+          videoWidth.load() > 0) {
         played = true;
         obs_source_media_started(parent);
       }
-      if ((st == OBS_MEDIA_STATE_ENDED || st == OBS_MEDIA_STATE_ERROR) &&
-          lastChildState != st) {
-        ended = st == OBS_MEDIA_STATE_ENDED && played &&
-                reachedVodEnd(lastPosition, lastDuration, sessionLive);
+      if (endSignal ||
+          ((st == OBS_MEDIA_STATE_ENDED || st == OBS_MEDIA_STATE_ERROR) &&
+           lastChildState != st)) {
+        ended = (endSignal || st == OBS_MEDIA_STATE_ENDED) && played &&
+                reachedVodEnd(progress.position(), lastDuration, sessionLive);
+        blog(LOG_DEBUG,
+             "[streaming-media] Decoder ended: position=%lld duration=%lld "
+             "natural=%d",
+             (long long)progress.position(), (long long)lastDuration, ended);
         accept = false;
+        if (audioHandoff)
+          audioHandoff->reset(epoch.load());
         clearChild();
         if (ended) {
           finalDuration = lastDuration;
@@ -471,6 +523,14 @@ struct Source {
     }
   }
   void tick() {
+    // OBS applies video-source updates on a later video tick. Do not admit
+    // old decoder frames/audio or signals while that update is pending.
+    if (waitingDecoder && decoderUpdated.exchange(false)) {
+      waitingDecoder = false;
+      decoderEnded = false;
+      accept = true;
+      loading = false;
+    }
     processQueue();
     std::optional<Result> r;
     {
@@ -548,6 +608,8 @@ struct Source {
     obs_data_set_bool(settings, "log_changes", false);
     obs_data_set_int(settings, "buffering_mb", r->req.buffer);
     obs_data_set_int(settings, "speed_percent", r->req.speed);
+    decoderUpdated = false;
+    waitingDecoder = true;
     obs_source_update(child, settings);
     obs_data_release(settings);
     {
@@ -556,8 +618,7 @@ struct Source {
       error.clear();
     }
     sessionLive = r->media.live;
-    accept = true;
-    loading = false;
+    decoderEnded = false;
     failed = false;
     blog(LOG_INFO, "[streaming-media] YouTube media resolved (%s, %s)",
          r->media.live ? "live" : "VOD",
@@ -645,16 +706,23 @@ void *create(obs_data_t *settings, obs_source_t *parent) {
     delete s;
     return nullptr;
   }
+  s->audioHandoff = std::make_unique<AudioHandoff>(
+      [s](const AudioPacket &p) { s->forwardAudio(p); });
   obs_source_set_audio_mixers(s->child, 0);
   obs_source_add_audio_capture_callback(s->child, Source::audio, s);
+  signal_handler_connect(obs_source_get_signal_handler(s->child), "media_ended",
+                         Source::childEnded, s);
+  signal_handler_connect(obs_source_get_signal_handler(s->child), "update",
+                         Source::childUpdated, s);
   auto proc = obs_source_get_proc_handler(parent);
   proc_handler_add(proc,
                    "void streaming_media_command(string op, string url, int "
                    "row, int target)",
                    Source::commandProc, s);
-  proc_handler_add(
-      proc, "void streaming_media_status(out string title, out string error)",
-      Source::statusProc, s);
+  proc_handler_add(proc,
+                   "void streaming_media_status(out string title, out string "
+                   "error, out int width, out int height)",
+                   Source::statusProc, s);
   proc_handler_add(proc,
                    "void streaming_media_submit(string url, out string "
                    "requestId, out string status)",
@@ -678,11 +746,11 @@ void render(void *p, gs_effect_t *) {
 }
 uint32_t width(void *p) {
   auto s = self(p);
-  return s->accept ? obs_source_get_width(s->child) : 0;
+  return s->accept ? s->videoWidth.load() : 0;
 }
 uint32_t height(void *p) {
   auto s = self(p);
-  return s->accept ? obs_source_get_height(s->child) : 0;
+  return s->accept ? s->videoHeight.load() : 0;
 }
 enum gs_color_space color(void *p, size_t n,
                           const enum gs_color_space *preferred) {
@@ -716,8 +784,10 @@ int64_t time(void *p) {
 }
 void seek(void *p, int64_t ms) {
   auto s = self(p);
-  if (s->accept)
+  if (s->accept) {
+    s->progress.seek(ms);
     obs_source_media_set_time(s->child, ms);
+  }
 }
 void restart(void *p) { self(p)->reload(); }
 void stop(void *p) { self(p)->cancel(); }
@@ -771,7 +841,7 @@ bool obs_module_load(void) {
   i.icon_type = OBS_ICON_TYPE_MEDIA;
   obs_register_source(&i);
   registerMediaDock();
-  blog(LOG_INFO, "[streaming-media] Loaded 0.3.1");
+  blog(LOG_INFO, "[streaming-media] Loaded 0.3.2");
   return true;
 }
 

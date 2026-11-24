@@ -102,3 +102,39 @@ all thread stacks, resume explicitly continues. Private log with frame args
 omitted. Fixture self-test using sleep passed actual GDB interrupt/snapshot.
 No OBS launch or install performed. Next: launch via script when user wants,
 then capture while frozen; investigate blocked thread/lock ownership.
+
+## 0.3.2 — production freeze fix (2026-11-23)
+Actual frozen process PID 254458, 21:59:04 final log. User collected GDB
+all-thread backtrace at 22:03; stored privately at
+~/.local/state/obs-hang-diagnostics/frozen-threads.txt. Relevant stacks:
+LWP 254458 main thread MediaDock::refresh -> obs_source_get_width;
+LWP 254473 graphics thread nested obs_source_get_width; LWP 257982 decoder
+obs_source_output_audio -> Source::audio -> obs_source_output_audio.
+libobs implementation holds source filter_mutex through audio capture
+callbacks and while invoking get_width. Parent size callback called child
+get_width; decoder capture called parent audio output. Opposite lock order.
+Fix: bounded preallocated PCM handoff, independent consumer, generation
+invalidation, no sink invocation while queue locked; atomically sampled
+decoder dimensions, dock reads status snapshot. Actual deferred decoder
+update signal gates output admission; child EOF signal captured atomically
+so decoder reconnect cannot hide terminal state. No external publication.
+Tests: first stress completed 68421 dimension queries, 1080p picture/mixer
+audio, controls, dock, next playback, teardown; EOF auto-advance failed.
+Second stress completed 62306 queries; stop preserved queue; EOF failed,
+logging premature terminal timestamp 23 ms. Identified update admission
+race and adjusted near-end test to observe actual seek position.
+Intermediate full OBS 32.2 isolated profile with Aftermarket and actual saved
+URL/default HW setting responded to 15/15 WebSocket health checks, playback
+reached 21200 ms, clean process exit. Not full production environment.
+CTest 4/4; audio handoff blocked-sink test 100 repeated passes.
+EOF and final installation verification recorded below.
+
+Final v0.3.2 regression: observed near-end seek at 626590 ms; decoder
+reported natural end at observed watermark 634583 / 634566 ms despite
+clock reset. VodProgress regression rejects stale position after backward
+seek. Final real libobs smoke (deadlock-fix-smoke4.log) exited 0:
+1920x1080, 25 nonblack frames, 38 source / 40 mixed audio blocks,
+pause/seek/resume, dock thumbnail, queue edit/next/auto-next/stop preservation
+all passed; 55493 concurrent dimension queries, source teardown passed.
+CTest 4/4. Installed atomically after backup, without restarting active OBS.
+Production retest still required on the full plugin graph.

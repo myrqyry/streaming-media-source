@@ -111,6 +111,17 @@ Streaming Media source and a password-protected WebSocket server. Pass the
 isolated profile's obs-websocket config.json path; never use the active
 production profile for this smoke (it changes that source's test settings).
 
+### Playback lock safety (0.3.2)
+
+The private decoder's audio capture callback does not call the parent
+source. It copies PCM and its original timestamp into a preallocated,
+bounded handoff queue. An independent consumer delivers the audio outside
+the decoder and queue locks. Source changes invalidate pending PCM. Video
+dimensions are sampled on the video tick and exposed atomically; the dock
+reads the snapshot rather than acquiring nested source filter locks.
+Decoder updates must be applied before accepting new playback output.
+This removes the lock inversion identified in a production freeze stack.
+
 ## Architecture
 
 yt-dlp runs on a cancellable worker with explicit time/size bounds and without

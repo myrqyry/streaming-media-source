@@ -339,6 +339,7 @@ class MediaDock : public QWidget {
                         "streaming_media_status", &call);
       auto name = QString::fromUtf8(calldata_string(&call, "title"));
       auto error = QString::fromUtf8(calldata_string(&call, "error"));
+      auto w = calldata_int(&call, "width"), h = calldata_int(&call, "height");
       calldata_free(&call);
       title->setText(!name.isEmpty()     ? name
                      : current.isEmpty() ? "No video loaded"
@@ -347,8 +348,6 @@ class MediaDock : public QWidget {
       state = obs_source_media_get_state(s.get());
       duration = obs_source_media_get_duration(s.get());
       auto text = stateText(state);
-      auto w = obs_source_get_width(s.get()),
-           h = obs_source_get_height(s.get());
       if (w && h)
         text += QString(" · %1 × %2").arg(w).arg(h);
       status->setText(error.isEmpty() ? text : error);

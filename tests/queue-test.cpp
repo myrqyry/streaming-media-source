@@ -59,4 +59,20 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 100; i++)
     full.append(a);
   check(full.appendRequest(c, {}, true) == "queue_full", "bounded queue");
+  VodProgress progress;
+  progress.observe(626590);
+  progress.observe(633000);
+  progress.observe(23);
+  check(reachedVodEnd(progress.position(), 634566, false),
+        "decoder clock reset preserves observed end");
+  progress.seek(45000);
+  progress.observe(633000);
+  check(progress.position() == 0,
+        "ignore old decoder position after backward seek");
+  progress.observe(45030);
+  progress.observe(46000);
+  check(!reachedVodEnd(progress.position(), 634566, false),
+        "backward seek does not advance queue");
+  progress.reset();
+  check(progress.position() == 0, "new playback clears progress");
 }

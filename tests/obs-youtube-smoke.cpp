@@ -161,6 +161,19 @@ int main(int argc, char **argv) {
   obs_add_raw_video_callback(nullptr, videoCb, nullptr);
   audio_convert_info conv{48000, AUDIO_FORMAT_FLOAT_PLANAR, SPEAKERS_STEREO};
   obs_add_raw_audio_callback(0, &conv, mixedCb, nullptr);
+  // Exercise the previously inverted parent/child filter lock order while
+  // actual decoder audio is arriving. Keep one source ref until the probe
+  // joins.
+  std::atomic<bool> queryDone{false};
+  std::atomic<unsigned> dimensionQueries{0};
+  std::thread dimensions([&] {
+    while (!queryDone) {
+      (void)obs_source_get_width(s);
+      (void)obs_source_get_height(s);
+      ++dimensionQueries;
+      std::this_thread::sleep_for(1ms);
+    }
+  });
   bool playing = until(45, [&] {
     return frames > 15 && audio > 15 && mixed > 15 &&
            obs_source_get_width(s) > 0 && obs_source_media_get_time(s) > 1000;
@@ -259,7 +272,13 @@ int main(int argc, char **argv) {
     until(3, [&] { return queued(s) == QStringList{argv[2]}; });
     auto end = obs_source_media_get_duration(s);
     if (nextPlayback && end > 10000) {
-      obs_source_media_set_time(s, end - 2500);
+      obs_source_media_set_time(s, end - 8000);
+      bool nearEnd = until(18, [&] {
+        auto t = obs_source_media_get_time(s);
+        return t >= end - 10000 && t < end;
+      });
+      fprintf(stderr, "EOF_SEEK observed=%d time=%lld duration=%lld\n", nearEnd,
+              (long long)obs_source_media_get_time(s), (long long)end);
       bool advanced = until(
           30, [&] { return currentUrl(s) == argv[2] && queued(s).isEmpty(); });
       auto n = mixed.load();
@@ -271,18 +290,26 @@ int main(int argc, char **argv) {
           });
     }
     fprintf(stderr, "AUTO_NEXT %d\n", autoNext);
+    // Stop must preserve the actual queue, even when an earlier assertion
+    // fails.
+    queueCommand(s, "autoplay", "", -1, 0);
+    auto expected = queued(s);
+    expected.append(third);
     queueCommand(s, "append", third);
-    until(3, [&] { return queued(s) == QStringList{third}; });
+    bool appended = until(3, [&] { return queued(s) == expected; });
     obs_source_media_stop(s);
     stopped = until(3, [&] {
       return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
     });
     std::this_thread::sleep_for(500ms);
-    stopped = stopped && queued(s) == QStringList{third};
+    stopped = stopped && appended && queued(s) == expected;
     fprintf(stderr, "QUEUE edit=%d next_playback=%d stop_preserves_queue=%d\n",
             queueEdit, nextPlayback, stopped);
   }
   dock.reset();
+  queryDone = true;
+  dimensions.join();
+  fprintf(stderr, "DIMENSION_QUERIES %u\n", dimensionQueries.load());
   obs_source_media_stop(s);
   auto weak = obs_source_get_weak_source(s);
   auto sceneWeak = obs_source_get_weak_source(obs_scene_get_source(scene));
@@ -317,8 +344,9 @@ int main(int argc, char **argv) {
   obs_wait_for_destroy_queue();
   pump();
   obs_shutdown();
-  return released && playing && pause && seek && resume && widgetReady &&
-                 queueEdit && nextPlayback && stopped && autoNext
+  return dimensionQueries > 100 && released && playing && pause && seek &&
+                 resume && widgetReady && queueEdit && nextPlayback &&
+                 stopped && autoNext
              ? 0
              : 1;
 }

@@ -79,3 +79,14 @@ QString MediaQueue::appendRequest(const QString &url, const QString &current,
   return append("https://www.youtube.com/watch?v=" + id) ? "queued"
                                                          : "invalid_url";
 }
+
+void VodProgress::observe(qint64 ms) {
+  if (ms < 0)
+    return;
+  if (target >= 0) {
+    if (ms < target - 2000 || ms > target + 2000)
+      return;
+    target = -1;
+  }
+  high = std::max(high, ms);
+}
