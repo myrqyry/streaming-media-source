@@ -31,9 +31,15 @@ Before a first public release:
 - Run deterministic CTest plus real playback, queue, injected decoder
   recovery, source resizing, WebSocket and source teardown verification.
   Validate production GPU decoding separately from Xvfb/software decoding.
-- Completed: current v0.5.1 dock screenshot from a disposable OBS scene,
+- Completed: v0.5.1 dock screenshot from a disposable OBS scene,
   issue template with version and redaction guidance, local package
-  instructions and troubleshooting table.
+  instructions and troubleshooting table. Refresh the screenshot for the
+  playlist import UI before public release.
+- v0.6.0 playlist import and normal playback smoke passed with the bundled
+  engine; 9 native CTest cases passed. Mixed-link choice and source-change
+  cancellation were not independently exercised in the live smoke.
+  The pinned OBS32 local CI driver passed; hosted CI is currently blocked
+  by an Actions budget. No hosted build/test steps ran.
 - Describe direct public-media playback accurately; do not promise
   universally ad-free video, access to restricted media, or supported
   providers/platforms that have not been verified. No account credentials

@@ -1,7 +1,8 @@
 # Streaming Media Source for OBS
 
 A standalone native OBS source for browser-free YouTube playback. Paste a
-public YouTube video URL into **Sources → Streaming Media (YouTube)**.
+public YouTube video URL into **Sources → Streaming Media (YouTube)**, or
+use the playback dock to import an entire public YouTube playlist.
 The original URL, not an expiring media URL, is stored in scene settings.
 Playback uses OBS's existing FFmpeg media engine; there is no browser,
 desktop capture, listening port, or full-video download.
@@ -10,11 +11,11 @@ desktop capture, listening port, or full-video download.
 
 *Version 0.5.1 in OBS 32.2 with the Colorway Fluffy Dark theme, using a disposable demo scene.*
 
-[Get started](#install-a-local-test-package) · [Playback and playlists](#playback-dock-02) · [WebSocket requests](#websocket-video-requests-03) · [Verification](#verification) · [Troubleshooting](#troubleshooting)
+[Get started](#install-a-local-test-package) · [Playback dock](#playback-dock-02) · [Import playlists](#import-youtube-playlists-060) · [WebSocket requests](#websocket-video-requests-03) · [Verification](#verification) · [Troubleshooting](#troubleshooting)
 
-> **Development preview.** Linux x86_64 and native OBS 32.2 are the current
+> **Development preview (0.6.0).** Linux x86_64 and native OBS 32.2 are the current
 > locally exercised target. Public release packages are not available.
-> [Build checks](https://github.com/myrqyry/streaming-media-source/actions) · [Release readiness](RELEASE_CHECKLIST.md)
+> [Build checks](https://github.com/myrqyry/streaming-media-source/actions) · [Release readiness](RELEASE_CHECKLIST.md) · [Changelog](CHANGELOG.md)
 
 ## Requirements
 
@@ -31,10 +32,12 @@ desktop capture, listening port, or full-video download.
 
 ## Install a local test package
 
-For a prepared Linux x86_64 bundled archive, close OBS and extract it into
-the per-user plugins directory:
+First generate the Linux x86_64 bundled archive using the [build and install](#build-and-install)
+instructions below. From the directory containing the archive and its checksum,
+verify the archive, close OBS, and extract it into the per-user plugins directory:
 
 ```sh
+sha256sum -c streaming-media-source-0.6.0-linux-x86_64-bundled.tar.gz.sha256
 mkdir -p "$HOME/.config/obs-studio/plugins"
 tar -xzf streaming-media-source-0.6.0-linux-x86_64-bundled.tar.gz \
   -C "$HOME/.config/obs-studio/plugins"
@@ -120,7 +123,11 @@ scene settings.
 
 ### Import YouTube playlists (0.6.0)
 
-Paste a public playlist URL into the existing dock URL field.
+In YouTube, copy a public playlist link (for example,
+`https://www.youtube.com/playlist?list=...`). Open **Docks → Streaming Media**,
+select the source you want to control, and paste the link into the existing URL field.
+
+Choose the action that matches what you want to happen:
 
 - **Queue** appends available videos in playlist order, preserving the
   current video and the existing auto-advance setting.
@@ -142,11 +149,20 @@ Paste a public playlist URL into the existing dock URL field.
   queued and capacity limits.
 - Titles, channel names and known durations populate the in-memory metadata
   cache. Thumbnails still use the existing fixed-host fetcher. The queue
-  duration summary explicitly identifies missing durations. After restarting
-  OBS, URLs persist but imported durations must be fetched again by importing
-  the playlist; they are not stored in scene settings.
+  duration summary covers upcoming videos, excludes the currently playing
+  video, and identifies entries with unknown durations. URLs survive an OBS
+  restart, but imported duration metadata is session-only. Reimporting a
+  playlist adds entries; it is not a metadata-refresh operation.
 
-Shuffle and repeat are not yet implemented.
+The queue limit is shared with existing individual videos. Large playlists are
+truncated rather than paginated; importing the same playlist again may add
+duplicates. Shuffle and repeat are not yet implemented.
+
+**Verified in 0.6.0:** the bundled engine imported a public Blender uploads
+playlist with an empty PATH and a fresh HOME. Queue added 99 entries alongside
+one existing entry without interrupting playback. Play selected the first video,
+preserved the existing queue, enabled automatic advancement, and restored actual
+video and mixer audio. Cancellation and the normal playback regression also passed.
 
 ### Playback recovery (0.4)
 
@@ -264,10 +280,12 @@ YouTube playback, or upload release binaries.
 | Target | Verification boundary |
 | --- | --- |
 | Linux x86_64 / OBS 32.2 / Qt 6.4.2 | Local native tests, isolated real playback and bundled package smoke |
-| Ubuntu 24.04 / pinned OBS 32.2 SDK | Local CI driver passed; hosted result pending |
+| Ubuntu 24.04 / pinned OBS 32.2 SDK | Local CI driver passed; hosted run blocked by Actions budget |
 | Windows, macOS, Flatpak, other OBS majors | Not qualified |
 
-See the [CI guide](docs/ci.md) for local reproduction. The optional real
+The first [hosted run](https://github.com/myrqyry/streaming-media-source/actions/runs/45404314210)
+was prevented from starting by the GitHub Actions budget; no build or test
+steps executed. See the [CI guide](docs/ci.md) for local reproduction. The optional real
 playback smoke below is deliberately separate from deterministic CI.
 
 
@@ -307,6 +325,9 @@ temporary signed media URLs; redact before sharing.
 | Video no longer resolves | Check for extractor updates in the dock, then retry. |
 | Update breaks resolution | Choose Use bundled extractor in the engine menu and retry. |
 | Playback stalls or has rendering issues | Try a lower resolution or disable hardware decoding; include the OBS/plugin versions and redacted logs in a bug report. |
+| Playlist import adds fewer videos than expected | Check the 100-entry upcoming queue limit, inaccessible entries and the 101-entry enumeration bound. |
+| Playlist import cannot start | Use a supported public playlist link, check the media engine, or try the individual video. |
+| Queue duration is incomplete | Some entries lack known durations; imported durations are not restored after restarting OBS. |
 | Remote requests are rejected | Enable Accept WebSocket video requests on the intended source and use its UUID. |
 
 FFmpeg and OBS logs may contain expiring signed media URLs. Redact them,

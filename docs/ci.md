@@ -47,7 +47,10 @@ The pinned OBS 32.2.0 SDK was downloaded, checksum-verified and built
 from source. A clean Release build of the committed source plus this
 CI change passed all 9 CTest cases, the module-only package allowlist,
 shared-library checks, SHA-256 verification and extraction comparison.
-GitHub-hosted execution is not yet established.
+The first [GitHub-hosted run](https://github.com/myrqyry/streaming-media-source/actions/runs/45404314210)
+was marked failed before any steps ran. GitHub reported that an Actions
+budget prevented the job from starting. Hosted SDK/build/test execution
+remains unqualified until the budget permits a run.
 
 The temporary archives are intentionally not release packages. Public
 redistribution requires the owner to establish licensing, provenance and
