@@ -50,6 +50,32 @@ def source_archive(work):
     return work / f"obs-studio-{VERSION}"
 
 
+def patch_once(path, old, new):
+    """Apply only an exact, reviewed change to the checksum-pinned SDK."""
+    data = path.read_bytes()
+    old, new = old.encode(), new.encode()
+    if data.count(old) != 1:
+        raise RuntimeError(f"Unexpected OBS {VERSION} source: {path}")
+    path.write_bytes(data.replace(old, new, 1))
+
+
+def patch_obs_sdk(obs, target):
+    if target == "windows-x64":
+        # OBS 32.2.0's boolean list getter reads the double union member,
+        # although add_item/insert_item store the boolean member.
+        patch_once(obs / "libobs/obs-properties.c",
+                   "data->items.array[idx].d : false;",
+                   "data->items.array[idx].b : false;")
+    elif target.startswith("macos-"):
+        # The installed framework's Resources symlink causes CMake's
+        # generated _IMPORT_PREFIX to resolve inside libobs.framework.
+        # Export package metadata outside the framework, leaving its
+        # actual binary and public headers in their standard locations.
+        patch_once(obs / "cmake/common/helpers_common.cmake",
+                   'set(package_destination "Frameworks/${target}.framework/Resources/cmake")',
+                   'set(package_destination "${OBS_CMAKE_DESTINATION}/${target}")')
+
+
 def config_dir(root, package):
     matches = list(root.rglob(f"{package}Config.cmake"))
     if len(matches) != 1:
@@ -117,6 +143,7 @@ def main():
     work.mkdir(parents=True, exist_ok=False)
     target, generator = native_config()
     obs = source_archive(work)
+    patch_obs_sdk(obs, target)
     sdk = work / "sdk"
     obs_build = work / "obs-build"
     # OBS's source archive pins the matching obs-deps and Qt hashes in

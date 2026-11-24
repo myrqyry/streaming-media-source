@@ -89,3 +89,17 @@ The new jobs are qualification in progress, not a support announcement.
 Neither CI test archives nor release binaries are uploaded. Actual OBS
 load, playback, audio, playlist imports, and clean teardown on the target
 platforms remain necessary before claiming production support.
+
+### OBS 32.2.0 SDK compatibility corrections
+
+The first native qualification run (45511857181) passed Linux but exposed
+two upstream SDK defects. MSVC rejects the boolean list getter's read of
+the double union member (C4244/C2220); the getter must read the boolean
+member used by the corresponding insertion functions. Both Mac runners
+built libobs but failed to resolve the generated framework-relative
+imported target. The native verifier applies one exact, checked source
+replacement for each affected platform after verifying the upstream
+archive checksum. macOS CMake package exports move to lib/cmake while
+frameworks and headers stay in their normal locations. The patches fail
+closed if the original source text changes. They affect only the
+temporary SDK build, not the user's OBS installation or our plugin.
