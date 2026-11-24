@@ -103,3 +103,15 @@ archive checksum. macOS CMake package exports move to lib/cmake while
 frameworks and headers stay in their normal locations. The patches fail
 closed if the original source text changes. They affect only the
 temporary SDK build, not the user's OBS installation or our plugin.
+
+The second qualification pass (PR run 45512874672, commit 72af0c8)
+successfully built the Windows SDK and compiled and ran all nine tests
+on both Mac architectures. Windows stopped at dependency-directory
+selection: upstream also provisions x86 helper dependencies. The verifier
+now selects the exact pinned x64 pair and rejects a missing required
+directory. macOS installation succeeded but the lipo invocation had
+the input file after -verify_arch; the input now precedes the operation.
+The deployment target is macOS 13.0 to match the linked Qt framework
+minimum reported by the linker. Regression tests reproduce both
+verifier defects. Native package qualification still requires a green
+rerun; live playback remains a separate gate.

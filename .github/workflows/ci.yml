@@ -24,6 +24,7 @@ jobs:
           persist-credentials: false
       - name: Check README links
         run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test-verify-native.py
           python3 .github/scripts/test-readme-links.py
           python3 .github/scripts/check_readme_links.py README.md
       - name: Install native build dependencies

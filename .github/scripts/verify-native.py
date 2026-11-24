@@ -7,7 +7,6 @@ import platform
 import plistlib
 import shutil
 import subprocess
-import sys
 import tarfile
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -32,7 +31,8 @@ def digest(path):
 
 
 def download(url, path, expected):
-    with urllib.request.urlopen(url, timeout=120) as src, path.open("wb") as dst:
+    request = urllib.request.Request(url, headers={"User-Agent": "streaming-media-source-native-ci"})
+    with urllib.request.urlopen(request, timeout=120) as src, path.open("wb") as dst:
         shutil.copyfileobj(src, dst)
     if digest(path) != expected:
         raise RuntimeError(f"SHA-256 mismatch: {path.name}")
@@ -55,7 +55,7 @@ def patch_once(path, old, new):
     data = path.read_bytes()
     old, new = old.encode(), new.encode()
     if data.count(old) != 1:
-        raise RuntimeError(f"Unexpected OBS {VERSION} source: {path}")
+        raise RuntimeError(f"Unexpected OBS {VERSION} source: {path}; expected exactly one occurrence of {old!r}")
     path.write_bytes(data.replace(old, new, 1))
 
 
@@ -83,6 +83,20 @@ def config_dir(root, package):
     return matches[0].parent
 
 
+def dependency_dirs(obs, target):
+    # OBS also builds/downloads x86 helper dependencies on Windows.
+    # Only the native x64 (or universal macOS) pair belongs on the
+    # plugin's CMake prefix and runtime library search paths.
+    arch = "x64" if target == "windows-x64" else "universal"
+    base = obs / ".deps"
+    deps = [base / f"obs-deps-2026-07-15-{arch}",
+            base / f"obs-deps-qt6-2026-07-15-{arch}"]
+    for path, label in zip(deps, ("OBS", "Qt")):
+        if not path.is_dir():
+            raise RuntimeError(f"Missing pinned {label} dependency directory: {path}")
+    return deps
+
+
 def native_config():
     host = platform.system()
     arch = platform.machine().lower()
@@ -90,7 +104,7 @@ def native_config():
         return "windows-x64", ["-G", "Visual Studio 18 2026", "-A", "x64,version=10.0.26100.0"]
     if host == "Darwin" and arch in ("arm64", "x86_64"):
         return f"macos-{arch}", ["-G", "Xcode", f"-DCMAKE_OSX_ARCHITECTURES={arch}",
-                                 "-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0",
+                                 "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
                                  "-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO"]
     raise RuntimeError(f"Unsupported native host: {host}/{arch}")
 
@@ -126,7 +140,7 @@ def verify_stage(stage, target):
         if actual != expected:
             raise RuntimeError(f"Unexpected macOS install payload: {actual ^ expected}")
         arch = target.removeprefix("macos-")
-        run("lipo", "-verify_arch", arch, binary)
+        run("lipo", binary, "-verify_arch", arch)
         run("otool", "-L", binary)
     for path, source in [(notices / "LICENSE", ROOT / "LICENSE"),
                          (notices / "licensing.md", ROOT / "docs/licensing.md")]:
@@ -156,10 +170,7 @@ def main():
         "--target", "obs-frontend-api", "--parallel", "4")
     run("cmake", "--install", obs_build, "--config", "Release",
         "--component", "Development", "--prefix", sdk)
-    deps = sorted(p for p in (obs / ".deps").iterdir()
-                  if p.is_dir() and p.name.startswith("obs-deps-"))
-    if len(deps) != 2:
-        raise RuntimeError(f"Expected OBS and Qt dependency directories: {deps}")
+    deps = dependency_dirs(obs, target)
     header = work / "obs-websocket-api.h"
     download(f"https://raw.githubusercontent.com/obsproject/obs-websocket/{WS_REV}/lib/obs-websocket-api.h",
              header, WS_SHA)
@@ -172,7 +183,7 @@ def main():
         f"-DOBS_WEBSOCKET_INCLUDE_DIR={work.as_posix()}", "-DSTREAMING_MEDIA_RUNTIME_DIR=")
     run("cmake", "--build", build, "--config", "Release", "--parallel", "4")
     env = os.environ.copy()
-    qt = next(p for p in deps if "qt6" in p.name)
+    qt = deps[1]
     env["QT_PLUGIN_PATH"] = str(qt / "plugins")
     env["QT_QPA_PLATFORM"] = "offscreen"
     if target == "windows-x64":
