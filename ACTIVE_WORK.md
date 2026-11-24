@@ -89,3 +89,16 @@ Next discriminating evidence: whether production UI froze versus vanished;
 capture live all-thread stack on a hang before exit, or use matching core
 on spontaneous crash; test production source with HW off as a reversible
 A/B without removing saved source. No root cause or fix claimed.
+
+## Confirmed freeze (2026-11-23 21:14 CST)
+User confirmed UI became unresponsive rather than disappearing spontaneously.
+Latest 21:05 production launch failed rendition validation at 21:05:25, then
+shut down normally at 21:12 with source and child destroyed. No OBS running
+at investigation time. Yama ptrace_scope=1: no arbitrary debugger attachment
+or security setting changes. Added scripts/obs-hang-debug.sh for a deliberate
+GDB-parent launch of the existing OBS binary in a separate tmux server;
+start refuses if OBS is already running, capture interrupts and collects
+all thread stacks, resume explicitly continues. Private log with frame args
+omitted. Fixture self-test using sleep passed actual GDB interrupt/snapshot.
+No OBS launch or install performed. Next: launch via script when user wants,
+then capture while frozen; investigate blocked thread/lock ownership.
