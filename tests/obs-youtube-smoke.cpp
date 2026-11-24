@@ -1,9 +1,20 @@
-#include <QCoreApplication>
+#include "media-dock.hpp"
+#include <QApplication>
+#include <QComboBox>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QPushButton>
 #include <QTemporaryDir>
+#include <QToolButton>
+#include <QWidget>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <mutex>
 #include <obs-module.h>
 #include <obs.h>
@@ -78,8 +89,36 @@ template <class F> bool until(int secs, F f) {
   } while (std::chrono::steady_clock::now() < end);
   return false;
 }
+static void queueCommand(obs_source_t *s, const char *op, const char *url = "",
+                         int row = -1, int target = -1) {
+  calldata_t c;
+  calldata_init(&c);
+  calldata_set_string(&c, "op", op);
+  calldata_set_string(&c, "url", url);
+  calldata_set_int(&c, "row", row);
+  calldata_set_int(&c, "target", target);
+  proc_handler_call(obs_source_get_proc_handler(s), "streaming_media_command",
+                    &c);
+  calldata_free(&c);
+}
+static QStringList queued(obs_source_t *s) {
+  auto d = obs_source_get_settings(s);
+  auto a = QJsonDocument::fromJson(QByteArray(obs_data_get_string(d, "queue")))
+               .array();
+  obs_data_release(d);
+  QStringList result;
+  for (auto v : a)
+    result.append(v.toString());
+  return result;
+}
+static QString currentUrl(obs_source_t *s) {
+  auto d = obs_source_get_settings(s);
+  auto r = QString::fromUtf8(obs_data_get_string(d, "url"));
+  obs_data_release(d);
+  return r;
+}
 int main(int argc, char **argv) {
-  QCoreApplication app(argc, argv);
+  QApplication app(argc, argv);
   QTemporaryDir tmp;
   if (argc != 3)
     return 2;
@@ -116,7 +155,7 @@ int main(int argc, char **argv) {
   if (!s)
     return 2;
   auto scene = obs_scene_create("Smoke scene");
-  obs_scene_add(scene, s);
+  auto item = obs_scene_add(scene, s);
   obs_set_output_source(0, obs_scene_get_source(scene));
   obs_source_add_audio_capture_callback(s, audioCb, nullptr);
   obs_add_raw_video_callback(nullptr, videoCb, nullptr);
@@ -155,17 +194,131 @@ int main(int argc, char **argv) {
     fprintf(stderr, "CONTROL pause=%d seek=%d resume_audio=%d time=%lld\n",
             pause, seek, resume, (long long)obs_source_media_get_time(s));
   }
+  std::unique_ptr<QWidget> dock(createMediaDockWidget());
+  dock->resize(360, 430);
+  dock->show();
+  auto picker = dock->findChild<QComboBox *>("media-source-picker");
+  auto entry = dock->findChild<QLineEdit *>("media-url");
+  auto add = dock->findChild<QPushButton *>("media-queue-add");
+  auto rows = dock->findChild<QListWidget *>("media-queue-list");
+  auto up = dock->findChild<QToolButton *>("media-queue-up");
+  auto remove = dock->findChild<QToolButton *>("media-queue-remove");
+  auto nextButton = dock->findChild<QToolButton *>("media-next");
+  auto title = dock->findChild<QLabel *>("media-title");
+  auto thumb = dock->findChild<QLabel *>("media-thumbnail");
+  bool widgetReady = picker && entry && add && rows && up && remove &&
+                     nextButton && title && thumb && until(5, [&] {
+                       return picker->count() == 1 &&
+                              !title->text().isEmpty() &&
+                              title->text() != "No video loaded";
+                     });
+  bool thumbnailReady =
+      widgetReady && until(8, [&] { return !thumb->pixmap().isNull(); });
+  fprintf(stderr, "DOCK widgets=%d thumbnail=%d\n", widgetReady,
+          thumbnailReady);
+  if (widgetReady)
+    dock->grab().save("build/dock-widget-preview.png");
+  bool queueEdit = false, nextPlayback = false, stopped = false,
+       autoNext = false;
+  if (playing && pause && seek && resume && widgetReady) {
+    const char *other = "https://youtu.be/aqz-KE-bpKQ";
+    const char *third = "https://youtu.be/jNQXAC9IVRw";
+    entry->setText(third);
+    add->click();
+    entry->setText(other);
+    add->click();
+    queueEdit =
+        until(3, [&] { return queued(s) == QStringList{third, other}; });
+    until(3, [&] { return rows->count() == 2; });
+    rows->setCurrentRow(1);
+    up->click();
+    queueEdit = queueEdit && until(3, [&] {
+                  return queued(s) == QStringList{other, third};
+                });
+    until(3, [&] {
+      return rows->count() == 2 && rows->item(1)->toolTip() == third;
+    });
+    rows->setCurrentRow(1);
+    remove->click();
+    queueEdit =
+        queueEdit && until(3, [&] { return queued(s) == QStringList{other}; });
+    auto before = mixed.load();
+    until(3, [&] { return nextButton->isEnabled(); });
+    nextButton->click();
+    bool changed =
+        until(5, [&] { return currentUrl(s) == other && queued(s).isEmpty(); });
+    nextPlayback =
+        changed && until(45, [&] {
+          return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+                 obs_source_media_get_time(s) > 1000 &&
+                 obs_source_media_get_time(s) < 20000 && mixed > before + 15;
+        });
+    // Force a seek near the end, then let the actual decoder finish naturally.
+    queueCommand(s, "append", argv[2]);
+    queueCommand(s, "autoplay", "", -1, 1);
+    until(3, [&] { return queued(s) == QStringList{argv[2]}; });
+    auto end = obs_source_media_get_duration(s);
+    if (nextPlayback && end > 10000) {
+      obs_source_media_set_time(s, end - 2500);
+      bool advanced = until(
+          30, [&] { return currentUrl(s) == argv[2] && queued(s).isEmpty(); });
+      auto n = mixed.load();
+      autoNext =
+          advanced && until(45, [&] {
+            return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+                   obs_source_media_get_time(s) > 1000 &&
+                   obs_source_media_get_time(s) < 20000 && mixed > n + 10;
+          });
+    }
+    fprintf(stderr, "AUTO_NEXT %d\n", autoNext);
+    queueCommand(s, "append", third);
+    until(3, [&] { return queued(s) == QStringList{third}; });
+    obs_source_media_stop(s);
+    stopped = until(3, [&] {
+      return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+    });
+    std::this_thread::sleep_for(500ms);
+    stopped = stopped && queued(s) == QStringList{third};
+    fprintf(stderr, "QUEUE edit=%d next_playback=%d stop_preserves_queue=%d\n",
+            queueEdit, nextPlayback, stopped);
+  }
+  dock.reset();
   obs_source_media_stop(s);
+  auto weak = obs_source_get_weak_source(s);
+  auto sceneWeak = obs_source_get_weak_source(obs_scene_get_source(scene));
+  // Drain the queued media stop before removing the owning scene item.
+  until(5, [&] {
+    return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+  });
+  obs_wait_for_destroy_queue();
+  pump();
   obs_remove_raw_audio_callback(0, mixedCb, nullptr);
   obs_remove_raw_video_callback(videoCb, nullptr);
   obs_source_remove_audio_capture_callback(s, audioCb, nullptr);
   obs_set_output_source(0, nullptr);
+  obs_sceneitem_remove(item);
   obs_scene_release(scene);
   obs_source_release(s);
   for (int i = 0; i < 20; i++) {
     pump();
     std::this_thread::sleep_for(20ms);
   }
+  bool released = until(8, [&] {
+    obs_wait_for_destroy_queue();
+    return obs_weak_source_expired(weak);
+  });
+  fprintf(stderr,
+          "TEARDOWN refs_released=%d source_expired=%d scene_expired=%d\n",
+          released, obs_weak_source_expired(weak),
+          obs_weak_source_expired(sceneWeak));
+  obs_weak_source_release(weak);
+  obs_weak_source_release(sceneWeak);
+  pump();
+  obs_wait_for_destroy_queue();
+  pump();
   obs_shutdown();
-  return playing && pause && seek && resume ? 0 : 1;
+  return released && playing && pause && seek && resume && widgetReady &&
+                 queueEdit && nextPlayback && stopped && autoNext
+             ? 0
+             : 1;
 }

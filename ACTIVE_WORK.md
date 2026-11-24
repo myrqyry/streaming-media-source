@@ -19,3 +19,21 @@ multi-source tests, user-facing error/quality diagnostics, playlist/dock UX,
 live qualification. No universal ad-removal or broadcast-rights claims.
 
 Repeat on final formatted/hardened build: 1920x1080, 25 nonblack frames, 38 source and 40 mixed audio blocks; pause/seek/resume all passed, exit 0.
+
+## 0.2.0 — dock and queue (2026-11-23)
+Verified in isolated libobs: 1920x1080 adaptive playback, 25 nonblack frames,
+38 source and 41 mixed audio blocks; pause/seek/resume all 1. Real Qt widget
+source picker and decoded YouTube thumbnail passed; actual widget buttons
+added, reordered, removed and advanced the queue into a second playback.
+Seek near EOF followed by real decoder completion advanced to the next URL
+with non-silent audio, AUTO_NEXT 1. Stop preserved queued entries. Source
+and private FFmpeg child destroyed before core shutdown; canvas-owned scene
+released during shutdown; process exit 0. Separate isolated full OBS 32.2
+profile registered the Streaming Media dock and source and shut down;
+unattributed 3 global OBS leaks (also seen in other isolated OBS profiles).
+Tests 2/2. No active user OBS changes; installed v0.1.0 retained.
+Locked: queue changes serialized in source tick; source owns advancement,
+not the dock timer; original URLs only in persisted settings; validated
+thumbnail ID and bounded fetch; explicit opt-in auto advance.
+Remaining: automatic bounded fresh-URL recovery with resume, richer queue
+metadata/thumbnail cards, hardware decode and multi-source qualification.

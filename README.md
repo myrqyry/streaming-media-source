@@ -14,7 +14,7 @@ desktop capture, listening port, or full-video download.
   runtime (Node >=22 or Deno); the source finds yt-dlp on PATH or in
   ~/.local/bin, and discovers Node in PATH or ~/.nvm.
 - curl, used for bounded media rendition validation.
-- CMake and Qt6 Core and libobs development headers for building.
+- CMake and Qt6 Core/Widgets/Network and libobs/frontend API development headers for building.
 
 ## Build and install
 
@@ -32,6 +32,19 @@ fresh media URL; expired URLs and extraction errors can require a restart.
 Quality is a cap, not a guarantee: when separate renditions are unavailable,
 the resolver may select a lower-quality combined video/audio stream.
 
+## Playback dock (0.2)
+
+Open **Docks → Streaming Media**. Choose an existing Streaming Media source
+by name; the picker follows its stable UUID, not the current scene item name.
+Paste a video link and select Play or Queue. The current thumbnail, title,
+actual decoded resolution, state, timeline and transport controls are shown
+without a browser. The queue is stored per source in the scene collection.
+Double-click an item to play it, or use the arrows and remove button.
+Auto advance is off by default; when enabled it advances only after an
+observed natural VOD end. Stop leaves upcoming entries intact. A premature
+decoder end or error preserves the queue and surfaces Retry, which resolves
+a fresh URL. Automatic resume/recovery is not yet implemented.
+
 ## Architecture
 
 yt-dlp runs on a cancellable worker with explicit time/size bounds and without
@@ -45,13 +58,13 @@ the child's own output mixer is disabled to avoid double routing.
 ## Verification
 
 ```sh
-xvfb-run -a timeout 100 build/obs-youtube-smoke \
+xvfb-run -a timeout 200 build/obs-youtube-smoke \
   "$PWD/build/obs-streaming-media.so" \
   'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
 ```
 
 This network-dependent isolated libobs test checks actual rendered pixels,
-nonzero source and mixed audio, pause, seek and resume. It is intentionally
+nonzero source and mixed audio, pause, seek and resume; actual Qt widget thumbnail, queue editing, next playback, natural EOF auto advance, stop preservation and teardown. It is intentionally
 separate from the deterministic CTest suite. Test logs from FFmpeg may contain
 temporary signed media URLs; redact before sharing.
 

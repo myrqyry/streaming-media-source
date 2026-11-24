@@ -1,3 +1,5 @@
+#include "media-dock.hpp"
+#include "media-queue.hpp"
 #include "resolver.hpp"
 #include <QDir>
 #include <QFile>
@@ -12,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <obs-module.h>
 #include <optional>
@@ -29,6 +32,10 @@ struct Request {
   int buffer = 8;
   bool restart = false;
   uint64_t id = 0;
+};
+struct QueueCommand {
+  QString op, url;
+  int row = -1, target = -1;
 };
 struct Result {
   Request req;
@@ -56,7 +63,8 @@ struct Source {
   obs_source_t *parent = nullptr, *child = nullptr;
   QTemporaryDir temp;
   std::atomic<bool> closing{false}, accept{false}, loading{false},
-      failed{false};
+      failed{false}, finished{false};
+  std::atomic<int64_t> finalDuration{0};
   std::atomic<uint64_t> epoch{0};
   std::mutex mutex;
   std::condition_variable cv;
@@ -64,18 +72,23 @@ struct Source {
   std::optional<Request> pending;
   std::optional<Result> result;
   std::thread worker;
-  bool restart = false;
+  QString title, error;
+  std::deque<QueueCommand> commands;
+  enum obs_media_state lastChildState = OBS_MEDIA_STATE_NONE;
+  bool played = false, sessionLive = false;
+  int64_t lastPosition = 0, lastDuration = 0;
   explicit Source(obs_source_t *s)
       : parent(s), temp(QDir::tempPath() + "/obs-streaming-media-XXXXXX") {}
   ~Source() {
+    accept = false;
     closing = true;
     epoch++;
     cv.notify_all();
+    if (child)
+      obs_source_remove_audio_capture_callback(child, audio, this);
     if (worker.joinable())
       worker.join();
-    accept = false;
     if (child) {
-      obs_source_remove_audio_capture_callback(child, audio, this);
       obs_source_remove_active_child(parent, child);
       obs_source_release(child);
     }
@@ -98,25 +111,44 @@ struct Source {
       out.data[i] = a->data[i];
     obs_source_output_audio(s->parent, &out);
   }
+  void clearChild() {
+    if (!child)
+      return;
+    obs_source_media_stop(child);
+    // Clear the remote input as well: native FFmpeg otherwise reconnects after
+    // EOF.
+    auto blank = obs_data_create();
+    obs_data_set_bool(blank, "is_local_file", false);
+    obs_data_set_string(blank, "input", "");
+    obs_source_update(child, blank);
+    obs_data_release(blank);
+  }
   void cancel() {
     epoch++;
     accept = false;
     loading = false;
     failed = false;
+    finished = false;
+    finalDuration = 0;
+    lastPosition = 0;
+    lastDuration = 0;
+    played = false;
+    lastChildState = OBS_MEDIA_STATE_NONE;
     {
       std::lock_guard<std::mutex> l(mutex);
       pending.reset();
       result.reset();
+      title.clear();
+      error.clear();
     }
-    if (child)
-      obs_source_media_stop(child);
+    clearChild();
   }
   void queue(Request req) {
     cancel();
     if (req.url.isEmpty())
       return;
     if (!validYoutube(req.url)) {
-      failed = true;
+      fail("Use an HTTPS YouTube URL");
       blog(LOG_WARNING, "[streaming-media] Use an HTTPS YouTube URL");
       return;
     }
@@ -260,7 +292,127 @@ struct Source {
         result = Result{req, std::move(media)};
     }
   }
+  void fail(const QString &message) {
+    {
+      std::lock_guard<std::mutex> l(mutex);
+      error = message;
+    }
+    loading = false;
+    failed = true;
+  }
+  void enqueue(QueueCommand cmd) {
+    std::lock_guard<std::mutex> l(mutex);
+    if (commands.size() < 64)
+      commands.push_back(std::move(cmd));
+  }
+  static void commandProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    QueueCommand cmd;
+    cmd.op = QString::fromUtf8(calldata_string(call, "op"));
+    cmd.url = QString::fromUtf8(calldata_string(call, "url"));
+    cmd.row = int(calldata_int(call, "row"));
+    cmd.target = int(calldata_int(call, "target"));
+    s->enqueue(std::move(cmd));
+  }
+  static void statusProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    std::lock_guard<std::mutex> l(s->mutex);
+    calldata_set_string(call, "title", qPrintable(s->title));
+    calldata_set_string(call, "error", qPrintable(s->error));
+  }
+  void processQueue() {
+    std::deque<QueueCommand> local;
+    {
+      std::lock_guard<std::mutex> l(mutex);
+      local.swap(commands);
+    }
+    bool ended = false;
+    if (accept) {
+      auto st = obs_source_media_get_state(child);
+      auto pos = obs_source_media_get_time(child),
+           dur = obs_source_media_get_duration(child);
+      if (dur > 0)
+        lastDuration = dur;
+      if (pos > 0)
+        lastPosition = pos;
+      if (st == OBS_MEDIA_STATE_PLAYING && !played && pos > 0 &&
+          obs_source_get_width(child) > 0) {
+        played = true;
+        obs_source_media_started(parent);
+      }
+      if ((st == OBS_MEDIA_STATE_ENDED || st == OBS_MEDIA_STATE_ERROR) &&
+          lastChildState != st) {
+        ended = st == OBS_MEDIA_STATE_ENDED && played &&
+                reachedVodEnd(lastPosition, lastDuration, sessionLive);
+        accept = false;
+        clearChild();
+        if (ended) {
+          finalDuration = lastDuration;
+          finished = true;
+          obs_source_media_ended(parent);
+        } else {
+          fail("Playback interrupted; use Retry to resolve fresh media");
+        }
+      }
+      lastChildState = st;
+    }
+    if (local.empty() && !ended)
+      return;
+    auto settings = obs_source_get_settings(parent);
+    auto q = MediaQueue::fromJson(
+        QString::fromUtf8(obs_data_get_string(settings, "queue")));
+    auto original = q.serialize();
+    QString url = QString::fromUtf8(obs_data_get_string(settings, "url"));
+    bool autoAdvance = obs_data_get_bool(settings, "auto_advance");
+    obs_data_release(settings);
+    auto initialUrl = url;
+    bool initialAuto = autoAdvance, load = false;
+    // Commands are serialized on the OBS video thread; stale indexed actions
+    // cannot silently target another entry after a queue change.
+    for (const auto &c : local) {
+      auto matches = [&] {
+        return c.row >= 0 && c.row < q.items().size() &&
+               q.items()[c.row] == c.url;
+      };
+      if (c.op == "append")
+        q.append(c.url);
+      else if (c.op == "remove" && matches())
+        q.take(c.row);
+      else if (c.op == "move" && matches())
+        q.move(c.row, c.target);
+      else if (c.op == "clear")
+        q = MediaQueue{};
+      else if (c.op == "autoplay")
+        autoAdvance = c.target != 0;
+      else if (c.op == "load" && !videoId(c.url).isEmpty()) {
+        url = c.url;
+        load = true;
+      } else if (c.op == "play" && matches()) {
+        url = q.take(c.row);
+        load = true;
+      } else if (c.op == "next" && !q.items().isEmpty()) {
+        url = q.take(0);
+        load = true;
+      }
+    }
+    if (ended && autoAdvance && !load && !q.items().isEmpty()) {
+      url = q.take(0);
+      load = true;
+    }
+    if (original != q.serialize() || initialAuto != autoAdvance || load) {
+      auto patch = obs_data_create();
+      obs_data_set_string(patch, "queue", qPrintable(q.serialize()));
+      obs_data_set_bool(patch, "auto_advance", autoAdvance);
+      if (load)
+        obs_data_set_string(patch, "url", qPrintable(url));
+      obs_source_update(parent, patch);
+      obs_data_release(patch);
+      if (load && url == initialUrl)
+        reload();
+    }
+  }
   void tick() {
+    processQueue();
     std::optional<Result> r;
     {
       std::lock_guard<std::mutex> l(mutex);
@@ -272,8 +424,7 @@ struct Source {
     if (!r || epoch != r->req.id)
       return;
     if (!r->media.error.isEmpty() || !child) {
-      loading = false;
-      failed = true;
+      fail(r->media.error);
       blog(LOG_WARNING, "[streaming-media] %s", qPrintable(r->media.error));
       return;
     }
@@ -283,8 +434,7 @@ struct Source {
       QFile f(input);
       if (!temp.isValid() ||
           !f.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-        loading = false;
-        failed = true;
+        fail("Cannot create private manifest");
         blog(LOG_WARNING, "[streaming-media] Cannot create private manifest");
         return;
       }
@@ -308,8 +458,7 @@ struct Source {
         auto v = writePlaylist("-video", r->media.videoPlaylist),
              a = writePlaylist("-audio", r->media.audioPlaylist);
         if (v.isEmpty() || a.isEmpty()) {
-          loading = false;
-          failed = true;
+          fail("Cannot write rendition playlists");
           return;
         }
         manifest.replace(r->media.videoUrl, QFileInfo(v).fileName());
@@ -317,8 +466,7 @@ struct Source {
       }
       auto bytes = manifest.toUtf8();
       if (f.write(bytes) != bytes.size()) {
-        loading = false;
-        failed = true;
+        fail("Cannot write media manifest");
         return;
       }
       f.close();
@@ -343,6 +491,12 @@ struct Source {
     obs_data_set_int(settings, "speed_percent", r->req.speed);
     obs_source_update(child, settings);
     obs_data_release(settings);
+    {
+      std::lock_guard<std::mutex> l(mutex);
+      title = r->media.title;
+      error.clear();
+    }
+    sessionLive = r->media.live;
     accept = true;
     loading = false;
     failed = false;
@@ -387,6 +541,8 @@ void defaults(obs_data_t *s) {
   obs_data_set_default_int(s, "speed", 100);
   obs_data_set_default_int(s, "buffer", 8);
   obs_data_set_default_bool(s, "restart", false);
+  obs_data_set_default_string(s, "queue", "[]");
+  obs_data_set_default_bool(s, "auto_advance", false);
 }
 obs_properties_t *properties(void *) {
   auto p = obs_properties_create();
@@ -429,6 +585,14 @@ void *create(obs_data_t *settings, obs_source_t *parent) {
   }
   obs_source_set_audio_mixers(s->child, 0);
   obs_source_add_audio_capture_callback(s->child, Source::audio, s);
+  auto proc = obs_source_get_proc_handler(parent);
+  proc_handler_add(proc,
+                   "void streaming_media_command(string op, string url, int "
+                   "row, int target)",
+                   Source::commandProc, s);
+  proc_handler_add(
+      proc, "void streaming_media_status(out string title, out string error)",
+      Source::statusProc, s);
   s->worker = std::thread([s] { s->run(); });
   s->update(settings);
   return s;
@@ -464,17 +628,21 @@ enum obs_media_state state(void *p) {
     return OBS_MEDIA_STATE_OPENING;
   if (s->failed)
     return OBS_MEDIA_STATE_ERROR;
+  if (s->finished)
+    return OBS_MEDIA_STATE_ENDED;
   if (!s->accept)
     return OBS_MEDIA_STATE_STOPPED;
   return obs_source_media_get_state(s->child);
 }
 int64_t duration(void *p) {
   auto s = self(p);
-  return s->accept ? obs_source_media_get_duration(s->child) : 0;
+  return s->accept ? obs_source_media_get_duration(s->child)
+                   : s->finalDuration.load();
 }
 int64_t time(void *p) {
   auto s = self(p);
-  return s->accept ? obs_source_media_get_time(s->child) : 0;
+  return s->accept ? obs_source_media_get_time(s->child)
+                   : s->finalDuration.load();
 }
 void seek(void *p, int64_t ms) {
   auto s = self(p);
@@ -483,6 +651,7 @@ void seek(void *p, int64_t ms) {
 }
 void restart(void *p) { self(p)->reload(); }
 void stop(void *p) { self(p)->cancel(); }
+void next(void *p) { self(p)->enqueue({"next", {}, -1, -1}); }
 void pause(void *p, bool paused) {
   auto s = self(p);
   if (s->accept)
@@ -527,9 +696,13 @@ bool obs_module_load(void) {
   i.media_set_time = seek;
   i.media_restart = restart;
   i.media_stop = stop;
+  i.media_next = next;
   i.media_play_pause = pause;
   i.icon_type = OBS_ICON_TYPE_MEDIA;
   obs_register_source(&i);
-  blog(LOG_INFO, "[streaming-media] Loaded 0.1.0");
+  registerMediaDock();
+  blog(LOG_INFO, "[streaming-media] Loaded 0.2.0");
   return true;
 }
+
+void obs_module_unload(void) { unregisterMediaDock(); }
