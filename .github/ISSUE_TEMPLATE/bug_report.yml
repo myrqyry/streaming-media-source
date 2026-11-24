@@ -11,14 +11,14 @@ body:
     id: versions
     attributes:
       label: Plugin and OBS versions
-      placeholder: Streaming Media Source 0.5.1 / OBS 32.2.0
+      description: Include both version numbers (for example, plugin 0.5.1 and OBS 32.2.0).
     validations:
       required: true
   - type: input
     id: environment
     attributes:
       label: Operating system, architecture and OBS installation type
-      placeholder: Linux x86_64, native package
+      description: Specify your OS, CPU architecture and whether OBS is native or Flatpak.
     validations:
       required: true
   - type: textarea
