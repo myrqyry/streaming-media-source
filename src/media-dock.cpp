@@ -1,9 +1,13 @@
 #include "media-dock.hpp"
 #include "media-queue.hpp"
+#include "playlist-metadata.hpp"
 #include <QApplication>
 #include <QBuffer>
+#include <QCache>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDrag>
+#include <QDropEvent>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
@@ -12,19 +16,25 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPainter>
 #include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStyle>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrlQuery>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -64,6 +74,158 @@ QString stateText(enum obs_media_state state) {
     return "Ready";
   }
 }
+constexpr int UrlRole = Qt::UserRole, AuthorRole = Qt::UserRole + 1;
+class PlaylistView : public QListWidget {
+  int dragRow = -1, insertionRow = -1;
+  int insertionAt(const QPoint &point) const {
+    auto index = indexAt(point);
+    int insertion = index.isValid() ? index.row() : count();
+    if (index.isValid() && point.y() > visualRect(index).center().y())
+      ++insertion;
+    return insertion;
+  }
+  void indicate(int row) {
+    insertionRow = row;
+    viewport()->update();
+  }
+
+public:
+  std::function<void()> dragStarted;
+  std::function<void(int, int)> dropped;
+  explicit PlaylistView(QWidget *parent) : QListWidget(parent) {
+    setDragEnabled(true);
+    setAcceptDrops(true);
+    setDropIndicatorShown(true);
+    setDragDropMode(QAbstractItemView::InternalMove);
+    setDefaultDropAction(Qt::MoveAction);
+    setSelectionMode(QAbstractItemView::SingleSelection);
+  }
+
+protected:
+  void startDrag(Qt::DropActions) override {
+    dragRow = currentRow();
+    if (dragRow < 0)
+      return;
+    if (dragStarted)
+      dragStarted();
+    QDrag drag(this);
+    auto mime = new QMimeData;
+    mime->setData("application/x-streaming-media-row", "1");
+    drag.setMimeData(mime);
+    drag.exec(Qt::MoveAction);
+    dragRow = -1;
+    indicate(-1);
+  }
+  void dragEnterEvent(QDragEnterEvent *e) override {
+    if (e->source() == this && dragRow >= 0)
+      e->acceptProposedAction();
+    else
+      e->ignore();
+  }
+  void dragMoveEvent(QDragMoveEvent *e) override {
+    if (e->source() != this || dragRow < 0) {
+      e->ignore();
+      return;
+    }
+    // The model is authoritative; accept the gesture but never mutate it here.
+    auto point = e->position().toPoint();
+    if (point.y() < 16)
+      verticalScrollBar()->setValue(verticalScrollBar()->value() - 12);
+    else if (point.y() > viewport()->height() - 16)
+      verticalScrollBar()->setValue(verticalScrollBar()->value() + 12);
+    indicate(insertionAt(point));
+    e->acceptProposedAction();
+  }
+  void dropEvent(QDropEvent *e) override {
+    if (e->source() != this || dragRow < 0) {
+      e->ignore();
+      return;
+    }
+    int insertion = insertionAt(e->position().toPoint());
+    indicate(-1);
+    int target = playlistDropTarget(dragRow, insertion, count());
+    if (target >= 0 && target != dragRow && dropped)
+      dropped(dragRow, target);
+    e->acceptProposedAction();
+  }
+  void dragLeaveEvent(QDragLeaveEvent *e) override {
+    indicate(-1);
+    QListWidget::dragLeaveEvent(e);
+  }
+  void paintEvent(QPaintEvent *e) override {
+    QListWidget::paintEvent(e);
+    if (insertionRow < 0 || !count())
+      return;
+    int y = insertionRow < count() ? visualItemRect(item(insertionRow)).top()
+                                   : visualItemRect(item(count() - 1)).bottom();
+    QPainter p(viewport());
+    p.setPen(QPen(palette().color(QPalette::Highlight), 2));
+    p.drawLine(3, y, viewport()->width() - 3, y);
+  }
+};
+class PlaylistDelegate : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+  QSize sizeHint(const QStyleOptionViewItem &option,
+                 const QModelIndex &) const override {
+    int h = std::max(36, option.fontMetrics.height() * 2 + 2);
+    return {100, h + 8};
+  }
+  void paint(QPainter *p, const QStyleOptionViewItem &option,
+             const QModelIndex &index) const override {
+    QStyleOptionViewItem opt(option);
+    initStyleOption(&opt, index);
+    auto title = opt.text;
+    auto icon = opt.icon;
+    auto style = opt.widget ? opt.widget->style() : QApplication::style();
+    opt.text.clear();
+    opt.icon = QIcon{};
+    style->drawControl(QStyle::CE_ItemViewItem, &opt, p, opt.widget);
+    p->save();
+    int h = std::max(24, opt.rect.height() - 8);
+    int w = std::min(h * 16 / 9, std::max(32, opt.rect.width() / 3));
+    QRect imageRect(opt.rect.left() + 5, opt.rect.center().y() - h / 2, w, h);
+    if (!icon.isNull())
+      icon.paint(p, imageRect, Qt::AlignCenter,
+                 opt.state & QStyle::State_Enabled ? QIcon::Normal
+                                                   : QIcon::Disabled);
+    else {
+      p->fillRect(imageRect, opt.palette.brush(QPalette::Mid));
+      auto fallback =
+          style->standardIcon(QStyle::SP_MediaPlay, nullptr, opt.widget);
+      fallback.paint(p, imageRect, Qt::AlignCenter);
+    }
+    auto role = opt.state & QStyle::State_Selected ? QPalette::HighlightedText
+                                                   : QPalette::Text;
+    p->setPen(opt.palette.color(role));
+    auto textRect = opt.rect.adjusted(w + 12, 4, -6, -4);
+    auto author = index.data(AuthorRole).toString();
+    QFont font = opt.font;
+    p->setFont(font);
+    int line = opt.fontMetrics.height();
+    auto first = textRect;
+    first.setHeight(line);
+    first.moveTop(textRect.center().y() - line);
+    p->drawText(
+        first, Qt::AlignLeft | Qt::AlignVCenter,
+        opt.fontMetrics.elidedText(title, Qt::ElideRight, first.width()));
+    auto second = first.translated(0, line);
+    QColor muted = opt.palette.color(role);
+    if (!(opt.state & QStyle::State_Selected))
+      muted.setAlphaF(.72);
+    p->setPen(muted);
+    p->drawText(
+        second, Qt::AlignLeft | Qt::AlignVCenter,
+        opt.fontMetrics.elidedText(author.isEmpty() ? "YouTube" : author,
+                                   Qt::ElideRight, second.width()));
+    p->restore();
+  }
+};
+struct CachedPlaylistItem {
+  PlaylistMetadata metadata;
+  QImage image;
+  bool titleDone = false, imageDone = false;
+};
 class MediaDock : public QWidget {
   QVBoxLayout *mainLayout = nullptr;
   QImage previewImage;
@@ -74,13 +236,17 @@ class MediaDock : public QWidget {
   QSlider *timeline;
   QToolButton *play, *stop, *back, *forward, *next, *retry, *up, *down, *remove;
   QPushButton *load, *append;
-  QListWidget *queue;
+  PlaylistView *queue;
   QCheckBox *autoplay;
   QTimer *timer;
   QNetworkAccessManager *network;
   QPointer<QNetworkReply> thumbnailReply;
   QString thumbId, sourceId, queueJson;
   QStringList queueUrls;
+  QCache<QString, CachedPlaylistItem> playlistCache{128};
+  QPointer<QNetworkReply> playlistReply;
+  QString dragSource, dragQueue;
+  bool shuttingDown = false;
   enum obs_media_state state = OBS_MEDIA_STATE_NONE;
   int64_t duration = 0;
   bool seeking = false;
@@ -156,6 +322,8 @@ class MediaDock : public QWidget {
       }
     }
     scalePreview();
+    queue->doItemsLayout();
+    queue->viewport()->update();
   }
   void scheduleTheme() {
     if (!themeReady || themeRefreshPending)
@@ -284,6 +452,112 @@ class MediaDock : public QWidget {
       reply->deleteLater();
     });
   }
+  void decorateQueueItem(QListWidgetItem *item) {
+    auto u = item->data(UrlRole).toString();
+    auto id = videoId(u);
+    auto cached = playlistCache.object(id);
+    auto title = cached && !cached->metadata.title.isEmpty()
+                     ? cached->metadata.title
+                     : id;
+    item->setText(title);
+    item->setData(AuthorRole, cached ? cached->metadata.author : QString{});
+    // Retain the original URL for accessible navigation and diagnostics.
+    item->setToolTip(
+        "<qt>" + title.toHtmlEscaped() + "<br>" +
+        (cached ? cached->metadata.author.toHtmlEscaped() : QString{}) +
+        "<br>" + u.toHtmlEscaped() + "</qt>");
+    item->setIcon(cached && !cached->image.isNull()
+                      ? QIcon(QPixmap::fromImage(cached->image))
+                      : QIcon{});
+  }
+  void fetchVisibleMetadata() {
+    if (shuttingDown || playlistReply || !isVisible() || !queue->isVisible() ||
+        !queue->count())
+      return;
+    for (int row = 0; row < queue->count(); ++row) {
+      auto item = queue->item(row);
+      auto rect = queue->visualItemRect(item);
+      if (rect.bottom() < 0)
+        continue;
+      if (rect.top() >= queue->viewport()->height())
+        break;
+      auto id = videoId(item->data(UrlRole).toString());
+      if (id.isEmpty())
+        continue;
+      auto cached = playlistCache.object(id);
+      if (!cached) {
+        cached = new CachedPlaylistItem;
+        playlistCache.insert(id, cached);
+      }
+      if (cached->titleDone && cached->imageDone)
+        continue;
+      bool metadata = !cached->titleDone;
+      QUrl address;
+      if (metadata) {
+        address = QUrl("https://www.youtube.com/oembed");
+        QUrlQuery query;
+        query.addQueryItem("url", "https://www.youtube.com/watch?v=" + id);
+        query.addQueryItem("format", "json");
+        address.setQuery(query);
+      } else
+        address = QUrl("https://i.ytimg.com/vi/" + id + "/mqdefault.jpg");
+      QNetworkRequest request(address);
+      request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                           QNetworkRequest::ManualRedirectPolicy);
+      request.setTransferTimeout(8000);
+      const qint64 limit = metadata ? 65536 : 1048576;
+      auto reply = network->get(request);
+      playlistReply = reply;
+      connect(reply, &QNetworkReply::downloadProgress, this,
+              [reply, limit](qint64 got, qint64 total) {
+                if (got > limit || total > limit)
+                  reply->abort();
+              });
+      connect(reply, &QNetworkReply::finished, this,
+              [this, reply, id, metadata, limit] {
+                if (playlistReply != reply) {
+                  reply->deleteLater();
+                  return;
+                }
+                playlistReply = nullptr;
+                if (!shuttingDown) {
+                  auto cached = playlistCache.object(id);
+                  if (cached) {
+                    if (metadata)
+                      cached->titleDone = true;
+                    else
+                      cached->imageDone = true;
+                    if (reply->error() == QNetworkReply::NoError &&
+                        reply->bytesAvailable() <= limit) {
+                      auto bytes = reply->readAll();
+                      if (metadata)
+                        cached->metadata = parsePlaylistMetadata(bytes);
+                      else {
+                        QBuffer buffer(&bytes);
+                        buffer.open(QIODevice::ReadOnly);
+                        QImageReader reader(&buffer, "JPEG");
+                        auto size = reader.size();
+                        if (size.isValid() && size.width() <= 1920 &&
+                            size.height() <= 1080) {
+                          reader.setScaledSize(
+                              size.scaled(QSize(160, 90), Qt::KeepAspectRatio));
+                          cached->image = reader.read();
+                        }
+                      }
+                    }
+                    for (int i = 0; i < queue->count(); ++i) {
+                      auto item = queue->item(i);
+                      if (videoId(item->data(UrlRole).toString()) == id)
+                        decorateQueueItem(item);
+                    }
+                  }
+                }
+                reply->deleteLater();
+                // The next normal refresh issues another visible-row request.
+              });
+      return;
+    }
+  }
   void setQueue(const QString &json) {
     if (json == queueJson)
       return;
@@ -293,14 +567,17 @@ class MediaDock : public QWidget {
     QSignalBlocker b(queue);
     queue->clear();
     for (const auto &u : queueUrls) {
-      auto item = new QListWidgetItem(videoId(u), queue);
-      item->setToolTip(u);
+      auto item = new QListWidgetItem(queue);
+      item->setData(UrlRole, u);
+      decorateQueueItem(item);
     }
     if (previous >= 0 && !queueUrls.isEmpty())
       queue->setCurrentRow(std::min(previous, int(queueUrls.size() - 1)));
     count->setText(QString("Up next · %1").arg(queueUrls.size()));
   }
   void refresh() {
+    if (shuttingDown)
+      return;
     if (refreshCount++ % 4 == 0)
       refreshSources();
     auto s = selected();
@@ -344,7 +621,7 @@ class MediaDock : public QWidget {
       title->setText(!name.isEmpty()     ? name
                      : current.isEmpty() ? "No video loaded"
                                          : videoId(current));
-      title->setToolTip(title->text());
+      title->setToolTip("<qt>" + title->text().toHtmlEscaped() + "</qt>");
       state = obs_source_media_get_state(s.get());
       duration = obs_source_media_get_duration(s.get());
       auto text = stateText(state);
@@ -375,6 +652,7 @@ class MediaDock : public QWidget {
     up->setEnabled(present && row > 0);
     down->setEnabled(present && row >= 0 && row + 1 < queueUrls.size());
     remove->setEnabled(present && row >= 0);
+    fetchVisibleMetadata();
   }
   void skip(int64_t delta) {
     auto s = selected();
@@ -467,7 +745,20 @@ public:
     autoplay = new QCheckBox("Auto advance", this);
     header->addWidget(autoplay);
     layout->addLayout(header);
-    queue = new QListWidget(this);
+    queue = new PlaylistView(this);
+    queue->setItemDelegate(new PlaylistDelegate(queue));
+    queue->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    queue->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    queue->dragStarted = [this] {
+      dragSource = sourceId;
+      dragQueue = queueJson;
+    };
+    queue->dropped = [this](int from, int target) {
+      if (sourceId != dragSource || queueJson != dragQueue || from < 0 ||
+          from >= queueUrls.size())
+        return;
+      action("move", queueUrls[from], from, target);
+    };
     queue->setObjectName("media-queue-list");
     queue->setAlternatingRowColors(true);
     queue->setMinimumHeight(0);
@@ -569,7 +860,10 @@ public:
     refresh();
   }
   void shutdown() {
+    shuttingDown = true;
     timer->stop();
+    if (playlistReply)
+      playlistReply->abort();
     if (thumbnailReply)
       thumbnailReply->abort();
   }

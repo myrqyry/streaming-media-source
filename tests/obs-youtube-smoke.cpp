@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QProcess>
 #include <QPushButton>
 #include <QTemporaryDir>
 #include <QToolButton>
@@ -301,13 +302,36 @@ int main(int argc, char **argv) {
     queueEdit =
         until(3, [&] { return queued(s) == QStringList{third, other}; });
     until(3, [&] { return rows->count() == 2; });
+    bool playlistMetadata = until(18, [&] {
+      return rows->count() == 2 && rows->item(0)->text() != "jNQXAC9IVRw" &&
+             !rows->item(0)->icon().isNull() &&
+             rows->item(1)->text() != "aqz-KE-bpKQ" &&
+             !rows->item(1)->icon().isNull();
+    });
+    fprintf(stderr, "PLAYLIST_METADATA %d\n", playlistMetadata);
+    if (playlistMetadata)
+      dock->grab().save("build/playlist-preview.png");
+    queueEdit = queueEdit && playlistMetadata;
     rows->setCurrentRow(1);
-    up->click();
+    if (qEnvironmentVariableIntValue("SMOKE_PLAYLIST_DRAG")) {
+      auto from = rows->viewport()->mapToGlobal(
+          rows->visualItemRect(rows->item(1)).center());
+      auto to = rows->viewport()->mapToGlobal(
+          rows->visualItemRect(rows->item(0)).topLeft() + QPoint(16, 4));
+      bool launched = QProcess::startDetached(
+          "python3", {"tests/playlist-drag-smoke.py", QString::number(from.x()),
+                      QString::number(from.y()), QString::number(to.x()),
+                      QString::number(to.y())});
+      queueEdit = queueEdit && launched;
+    } else
+      up->click();
     queueEdit = queueEdit && until(3, [&] {
                   return queued(s) == QStringList{other, third};
                 });
+    fprintf(stderr, "PLAYLIST_REORDER %d\n", queueEdit);
     until(3, [&] {
-      return rows->count() == 2 && rows->item(1)->toolTip() == third;
+      return rows->count() == 2 &&
+             rows->item(1)->data(Qt::UserRole).toString() == third;
     });
     rows->setCurrentRow(1);
     remove->click();

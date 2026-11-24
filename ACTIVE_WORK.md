@@ -165,3 +165,24 @@ records licensing, history privacy, packaging, validation and documentation
 gates. Repository remains private. No new install or push in this slice.
 Next: visual queue metadata and compact playlist controls; public package
 and screenshot/issue documentation after license/history review.
+
+## v0.4.1 — visual playlist rows and drag ordering
+Native palette-aware thumbnail/title/channel delegate, bounded asynchronous
+oEmbed and fixed-host JPEG fetching for visible rows only, 128-entry
+in-memory ID cache, one queue request in flight, unavailable metadata
+fallback. No yt-dlp subprocess per queue item. Original URL persistence
+unchanged. Drag captures source/queue snapshot and sends existing move
+command only if still current; native highlight insertion indicator.
+Metadata tooltips escape HTML. Playlist parser and insertion-target
+tests red before implementation, then CTest 6/6. Real libobs playback
+smoke passed with titles and thumbnails for both queue entries, normal
+move controls, EOF auto-next, 55420 dimension queries, clean teardown.
+Real X11 drag smoke exited 0: PLAYLIST_METADATA 1, PLAYLIST_REORDER 1,
+AUTO_NEXT 1, QUEUE edit/next/stop preservation 1, 50949 dimension
+queries, clean teardown. Final tooltip-only edit rebuilt and passed
+CTest 6/6; actual OBS 32.2 Fluffy Dark isolated dock rendered two
+resolved rows and one fallback while 1080p playback progressed.
+Screenshot saved in build/playlist-theme.JMIZXi/playlist.png (not
+tracked). Remaining: durations, remaining time, shuffle/repeat;
+automatic silent-stall detection, public-release checklist.
+No installation, push, visibility change or production restart.

@@ -46,6 +46,21 @@ decoder end or error preserves the queue and surfaces Retry, which resolves
 a fresh URL. Enable or disable automatic recovery in source properties
 (**Recover interrupted playback**, enabled by default).
 
+### Visual playlists (0.4.1)
+
+Upcoming videos show a thumbnail, title and channel name, with full
+metadata and original URL in the tooltip. Drag rows to reorder them,
+or use the existing move buttons. Reordering is applied by the source;
+a drag is discarded if the selected source or queue changed mid-gesture.
+
+Public YouTube oEmbed metadata and fixed-host thumbnail requests are
+asynchronous, bounded and cached in memory by video ID. Only visible
+rows are requested, one at a time; unavailable metadata falls back to
+the video ID without blocking playback. The delegate inherits the OBS
+theme and selection palette. Queue entries remain original URLs in
+scene settings. Durations, total remaining time, shuffle and repeat
+are not yet implemented.
+
 ### Playback recovery (0.4)
 
 After playback has started, an unexpected decoder stop, early end or error
@@ -165,7 +180,10 @@ the same command with `SMOKE_RECOVERY=1` in the environment: this stops
 the actual private FFmpeg decoder mid-video, checks fresh resolution,
 position and mixer audio recovery, and cancels a second scheduled retry
 using the parent Stop action. This is an injected decoder interruption,
-not a simulated network outage. Test logs from FFmpeg may contain
+not a simulated network outage. Set `SMOKE_PLAYLIST_DRAG=1` for the
+real X11 drag-reorder test in the normal playback smoke (requires Python
+Xlib). It validates that public titles and thumbnails load and that the
+actual persisted queue order changes. Test logs from FFmpeg may contain
 temporary signed media URLs; redact before sharing.
 
 ## Scope and limits
