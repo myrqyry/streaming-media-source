@@ -186,3 +186,26 @@ Screenshot saved in build/playlist-theme.JMIZXi/playlist.png (not
 tracked). Remaining: durations, remaining time, shuffle/repeat;
 automatic silent-stall detection, public-release checklist.
 No installation, push, visibility change or production restart.
+
+## v0.5.0 — self-contained media runtime
+Official yt-dlp Linux standalone 2026.11.23 and Deno 2.9.8 pinned
+by upstream release asset SHA-256 and size, both verified and executed.
+scripts/prepare-runtime.py prepares the bundle from official release
+assets; CMake stages the executable pair in data/runtime. OBS module
+data discovery prefers the complete bundled pair, with complete system
+yt-dlp + Deno/Node fallback for source-only builds. No external curl:
+Qt HTTPS probes enforce the same 1 MiB response limit, cancellation,
+5-second overall deadline and validated HTTPS googlevideo redirects.
+CTest 7/7 including runtime precedence, executable permissions and URL
+validation. Actual staged module playback smoke exited 0: 1080p video,
+source/mixed audio, pause/seek/resume, visual metadata, reorder, next,
+natural EOF auto-next, queue preservation, 46974 dimension queries,
+teardown. Second smoke ran with a fresh HOME and empty PATH, exited 0:
+bundled Deno logged, real playback/audio restored after injected child
+stop at 50133 ms, second retry cancelled, queue preserved, 27404 queries
+and teardown. No system extractor, Python, JS engine or curl needed at
+runtime. Staged module build ID 151911b621c1616f00586ced9b2577210ee24919.
+Local runtime size 131 MiB uncompressed, Linux x86_64 only. No binaries
+tracked; build/bundle-stage-path records tested stage. In-dock updater
+and full upstream binary redistribution compliance remain future work.
+No production install or restart, push or visibility change.

@@ -10,20 +10,36 @@ desktop capture, listening port, or full-video download.
 
 - OBS Studio 32.x, native Linux installation (development/verification target:
   OBS 32.2.0, libobs 32.0.1 headers, Qt 6.4.2).
-- Current yt-dlp with its matching EJS components and a supported JavaScript
-  runtime (Node >=22 or Deno); the source finds yt-dlp on PATH or in
-  ~/.local/bin, and discovers Node in PATH or ~/.nvm.
-- curl, used for bounded media rendition validation.
-- CMake and Qt6 Core/Widgets/Network and libobs/frontend API development headers for building.
+- The bundled Linux x86_64 package includes the standalone yt-dlp
+  extractor and Deno JavaScript runtime. No separate Python, Node,
+  yt-dlp, curl executable or PATH configuration is required.
+- Source-only builds without the bundle automatically discover a complete
+  yt-dlp + Deno or Node installation on PATH, in ~/.local/bin or in the
+  existing NVM layout. The same Qt HTTPS rendition validation is used.
+- CMake and Qt6 Core/Widgets/Network and libobs/frontend API development
+  headers for building.
 
 ## Build and install
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+# Maintainers: prepare verified upstream runtime executables (Python 3.11+).
+python3 scripts/prepare-runtime.py --output build/bundle/data/runtime --cache build/runtime-downloads
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DSTREAMING_MEDIA_RUNTIME_DIR="$PWD/build/bundle/data/runtime"
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix "$HOME/.config/obs-studio/plugins/obs-streaming-media"
 ```
+
+The bundle is installed under the module's own `data/runtime/` directory.
+It is preferred over system tools. For a source-only development build,
+configure with `-DSTREAMING_MEDIA_RUNTIME_DIR=` and supply an existing
+yt-dlp plus supported JavaScript engine. The install is local; no packages
+are installed globally. Runtime pins are intentionally explicit and
+downloaded assets are checked against recorded upstream SHA-256 digests.
+Runtime updates currently require preparing a new pinned bundle; an
+in-dock update mechanism is not implemented. Review third-party license
+and corresponding-source obligations before distributing the binaries.
 
 Restart OBS when convenient. In source properties, paste a YouTube URL and
 select maximum resolution, hardware decoding, playback speed and network
@@ -157,8 +173,8 @@ This removes the lock inversion identified in a production freeze stack.
 
 ## Architecture
 
-yt-dlp runs on a cancellable worker with explicit time/size bounds and without
-loading user config. The resolver validates reachable video and audio
+The bundled or system yt-dlp runs on a cancellable worker with explicit time/size bounds and without
+loading user config. The resolver uses Qt HTTPS with bounded response sizes, deadlines and validated googlevideo redirects (no external curl process). It validates reachable video and audio
 renditions before choosing them, preserves signed URLs verbatim, and for
 supported VOD HLS playlists saves only the validated playlist metadata in a
 private temporary directory. FFmpeg reads the segments on demand. A private
@@ -172,6 +188,11 @@ xvfb-run -a timeout 200 build/obs-youtube-smoke \
   "$PWD/build/obs-streaming-media.so" \
   'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
 ```
+
+For a staged bundled build, set `SMOKE_MODULE_DATA` to the staged
+`data/` directory and point the test at the staged module binary.
+The test can run with an empty PATH and a fresh HOME to verify runtime
+independence.
 
 This network-dependent isolated libobs test checks actual rendered pixels,
 nonzero source and mixed audio, pause, seek and resume; actual Qt widget thumbnail, queue editing, next playback, natural EOF auto advance, stop preservation and teardown. It is intentionally

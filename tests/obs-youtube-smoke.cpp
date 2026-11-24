@@ -145,7 +145,8 @@ int main(int argc, char **argv) {
     return 2;
   if (!load("/usr/lib/x86_64-linux-gnu/obs-plugins/obs-ffmpeg.so",
             "/usr/share/obs/obs-plugins/obs-ffmpeg") ||
-      !load(argv[1], qPrintable(tmp.path())))
+      !load(argv[1],
+            qPrintable(qEnvironmentVariable("SMOKE_MODULE_DATA", tmp.path()))))
     return 2;
   auto d = obs_data_create();
   obs_data_set_string(d, "url", argv[2]);

@@ -7,6 +7,7 @@ struct Media {
   bool live = false;
 };
 bool validYoutube(const QString &url);
+bool validMediaUrl(const QString &url);
 Media parseMedia(const QByteArray &json);
 #include <functional>
 Media selectMedia(const QByteArray &json, int maxHeight,

@@ -2,6 +2,7 @@
 #include "media-dock.hpp"
 #include "media-queue.hpp"
 #include "media-recovery.hpp"
+#include "media-runtime.hpp"
 #include "media-websocket.hpp"
 #include "resolver.hpp"
 #include <QDir>
@@ -48,23 +49,11 @@ struct Result {
   Request req;
   Media media;
 };
-static QString exe(const QString &name) {
-  auto p = QStandardPaths::findExecutable(name);
-  if (!p.isEmpty())
-    return p;
-  p = QDir::homePath() + "/.local/bin/" + name;
-  if (QFileInfo(p).isExecutable())
-    return p;
-  if (name == "node") {
-    QDir d(QDir::homePath() + "/.nvm/versions/node");
-    for (auto version : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot,
-                                    QDir::Name | QDir::Reversed)) {
-      p = d.absoluteFilePath(version + "/bin/node");
-      if (QFileInfo(p).isExecutable())
-        return p;
-    }
-  }
-  return {};
+static MediaRuntime runtime() {
+  char *path = obs_module_file("runtime");
+  auto bundle = QString::fromUtf8(path ? path : "");
+  bfree(path);
+  return findMediaRuntime(bundle);
 }
 struct Source {
   obs_source_t *parent = nullptr, *child = nullptr;
@@ -226,9 +215,9 @@ struct Source {
   }
   Media resolve(const Request &r) {
     Media m;
-    auto path = exe("yt-dlp");
-    if (path.isEmpty()) {
-      m.error = "yt-dlp not found";
+    auto engine = runtime();
+    if (!engine.ready()) {
+      m.error = "Media engine missing; install the bundled runtime package";
       return m;
     }
     QStringList args = {"--ignore-config",
@@ -240,12 +229,13 @@ struct Source {
                         "--retries",
                         "1",
                         "-J"};
-    auto node = exe("node");
-    if (!node.isEmpty())
-      args << "--js-runtimes" << ("node:" + node);
+    args << "--no-js-runtimes" << "--js-runtimes"
+         << (engine.engine + ":" + engine.js);
     args << "--" << r.url;
     QProcess p;
-    p.setProgram(path);
+    p.setProgram(engine.extractor);
+    blog(LOG_INFO, "[streaming-media] Media engine: %s (%s)",
+         engine.bundled ? "bundled" : "system", qPrintable(engine.engine));
     p.setArguments(args);
     p.start();
     if (!p.waitForStarted(1500)) {
@@ -273,11 +263,6 @@ struct Source {
                 "availability";
       return m;
     }
-    auto curl = exe("curl");
-    if (curl.isEmpty()) {
-      m.error = "curl not found (required for rendition validation)";
-      return m;
-    }
     QHash<QString, QByteArray> snapshots;
     bool live =
         QJsonDocument::fromJson(output).object().value("is_live").toBool();
@@ -286,44 +271,8 @@ struct Source {
           if (closing || epoch != r.id ||
               std::chrono::steady_clock::now() > deadline)
             return false;
-          QProcess check;
-          QStringList args = {"--disable",
-                              "--silent",
-                              "--show-error",
-                              "--fail",
-                              "--location",
-                              "--proto",
-                              "=https",
-                              "--proto-redir",
-                              "=https",
-                              "--max-time",
-                              "5",
-                              "--max-filesize",
-                              "1048576",
-                              "--config",
-                              "-"};
-          if (!hls)
-            args << "--range" << "0-1023";
-          check.start(curl, args);
-          if (!check.waitForStarted(1000))
-            return false;
-          // Input URLs are not exposed in command-line arguments or plugin log
-          // messages.
-          check.write(("url = \"" + url + "\"\n").toUtf8());
-          check.closeWriteChannel();
-          while (check.state() != QProcess::NotRunning) {
-            check.waitForFinished(100);
-            if (closing || epoch != r.id ||
-                std::chrono::steady_clock::now() > deadline) {
-              check.kill();
-              check.waitForFinished(1000);
-              return false;
-            }
-          }
-          auto body = check.readAllStandardOutput();
-          if (check.exitStatus() != QProcess::NormalExit ||
-              check.exitCode() != 0)
-            return false;
+          auto body = probeMediaHttps(url, hls, deadline,
+                                      [&] { return closing || epoch != r.id; });
           if (!hls)
             return !body.isEmpty();
           if (live)
@@ -938,7 +887,7 @@ bool obs_module_load(void) {
   i.icon_type = OBS_ICON_TYPE_MEDIA;
   obs_register_source(&i);
   registerMediaDock();
-  blog(LOG_INFO, "[streaming-media] Loaded 0.4.1");
+  blog(LOG_INFO, "[streaming-media] Loaded 0.5.0");
   return true;
 }
 

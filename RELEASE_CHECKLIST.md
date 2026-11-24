@@ -15,6 +15,11 @@ Before a first public release:
   project-specific context. Prior scans checked common credential patterns
   but are not a guarantee. Review the historical development notes.
   Do not publish raw FFmpeg logs, debugger dumps or saved scene collections.
+- The local Linux x86_64 bundle now stages pinned official yt-dlp and
+  Deno executables with SHA-256 verification. No external curl is required.
+  Complete upstream binary redistribution notices, corresponding source
+  obligations and package ABI review before uploading public artifacts.
+  Automatic in-app runtime updating is still a separate feature.
 - Provide an installable Linux package with the supported OBS/Qt ABI and
   reproducible build instructions. Current development target is OBS 32.x
   native Linux, not Windows/macOS/Flatpak. Keep the source ID and install

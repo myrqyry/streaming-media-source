@@ -12,7 +12,7 @@ bool validYoutube(const QString &s) {
          (h == "youtube.com" || h == "www.youtube.com" ||
           h == "m.youtube.com" || h == "youtu.be");
 }
-static bool mediaUrl(const QString &s) {
+bool validMediaUrl(const QString &s) {
   QUrl u(s, QUrl::StrictMode);
   auto h = u.host().toLower();
   return u.isValid() && u.scheme() == "https" && u.userInfo().isEmpty() &&
@@ -62,8 +62,8 @@ Media parseMedia(const QByteArray &bytes) {
       }
     au = a.value("url").toString();
     int w = v.value("width").toInt(), h = v.value("height").toInt();
-    if (!hls(v) || !hls(a) || !mediaUrl(vu) || !mediaUrl(au) || w <= 0 ||
-        h <= 0 || w > 7680 || h > 4320) {
+    if (!hls(v) || !hls(a) || !validMediaUrl(vu) || !validMediaUrl(au) ||
+        w <= 0 || h <= 0 || w > 7680 || h > 4320) {
       m.error = "Unsupported or unsafe adaptive streams";
       return m;
     }
@@ -81,7 +81,7 @@ Media parseMedia(const QByteArray &bytes) {
   }
   auto f = tracks.size() == 1 ? tracks.at(0).toObject() : o;
   auto u = f.value("url").toString();
-  if (!mediaUrl(u) || !hasTrack(f, "vcodec") || !hasTrack(f, "acodec")) {
+  if (!validMediaUrl(u) || !hasTrack(f, "vcodec") || !hasTrack(f, "acodec")) {
     m.error = "No playable combined video/audio stream";
     return m;
   }
@@ -98,7 +98,8 @@ Media selectMedia(const QByteArray &bytes, int maxHeight,
   std::vector<QJsonObject> video, audio, combined;
   for (auto item : root.value("formats").toArray()) {
     auto f = item.toObject();
-    if (!mediaUrl(f.value("url").toString()) || f.value("has_drm").toBool())
+    if (!validMediaUrl(f.value("url").toString()) ||
+        f.value("has_drm").toBool())
       continue;
     bool v = hasTrack(f, "vcodec"), a = hasTrack(f, "acodec");
     int h = f.value("height").toInt();
@@ -182,7 +183,7 @@ bool validVodPlaylist(const QByteArray &body) {
           line.startsWith("#EXT-X-I-FRAME-STREAM-INF"))
         return false;
     } else {
-      if (!mediaUrl(QString::fromUtf8(line)))
+      if (!validMediaUrl(QString::fromUtf8(line)))
         return false;
       segment = true;
     }
