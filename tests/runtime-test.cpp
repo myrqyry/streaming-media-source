@@ -44,6 +44,26 @@ int main(int argc, char **argv) {
   fixture(root + "/bundled/deno", false);
   r = findMediaRuntime(root + "/bundled", {}, false);
   check(!r.ready(), "nonexecutable bundle rejected, no implicit PATH fallback");
+  // A module-only install must find a complete user-provided pair
+  // without PATH configuration or accidental mixing of partial pairs.
+  auto managed = root + "/managed";
+  auto manual = manualRuntimeDirectory(managed);
+  check(QDir().mkpath(manual), "manual directory");
+  fixture(manual + "/yt-dlp");
+  r = selectMediaRuntime(root + "/missing", managed, {}, false);
+  check(!r.ready(), "incomplete user pair rejected");
+  fixture(manual + "/deno");
+  r = selectMediaRuntime(root + "/missing", managed, {}, false);
+  check(r.ready() && r.userProvided && !r.bundled &&
+            r.extractor == manual + "/yt-dlp" && r.js == manual + "/deno",
+        "user runtime selected without PATH");
+  r = selectMediaRuntime(root + "/bundled", managed, {root + "/system"}, false);
+  check(r.userProvided, "user runtime preferred over system fallback");
+  fixture(root + "/bundled/deno");
+  r = selectMediaRuntime(root + "/bundled", managed, {root + "/system"}, false);
+  check(r.bundled && !r.userProvided, "complete pinned bundle stays preferred");
+  check(manualRuntimeDirectory({}).isEmpty(),
+        "empty managed path never relative");
   check(validMediaUrl("https://r1.googlevideo.com/video?x=%2F"),
         "valid rendition");
   check(!validMediaUrl("https://googlevideo.com.evil.invalid/x"),

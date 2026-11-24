@@ -317,3 +317,28 @@ exact module-plus-notices allowlist, dependency and archive checksum
 validation; both extracted notices match originals. README links passed.
 No production install, push, or release. Await owner confirmation before
 publishing the prepared license checkpoint.
+
+## User-installed runtime setup
+Owner prefers straightforward official download links/instructions rather
+than requiring runtime redistribution or automatic provisioning. Added
+docs/runtime-setup.md with platform-specific pinned asset links, SHA-256
+values verified against the official yt-dlp 2026.11.23 and Deno v2.9.8
+GitHub release metadata, and file placement/permission/refresh instructions.
+Dock engine menu opens official download pages, writable runtime/manual
+directory, setup guide and status refresh. Complete pinned bundle stays
+first, complete manual pair next, then system fallback; incomplete pairs
+are never mixed with manual files. Windows executable naming prepared but
+native Windows/macOS builds are not qualified. Manual files are supplied
+and checked by the user; no automatic verification or download claimed.
+Manual installs require replacing the files while OBS is closed; updater
+and rollback remain specific to Linux x86_64 bundled installations.
+Red runtime-test missing manual selection API; green CTest 9/9 including
+complete/incomplete manual pairs, precedence and empty path. Real isolated
+libobs smoke used empty module data, fresh HOME, empty PATH, and official
+runtime executables linked into the manual config directory. Logged
+user-provided Deno runtime, 1080p video/mixer audio, transport, playlist
+cancel/99-item append without interruption, first-video playback,
+40608 concurrent dimension queries and teardown; exit 0. README links
+passed. No production install or public push; guide URL becomes available
+on master when the prepared local commits are published. License
+checkpoint remains local pending owner approval.

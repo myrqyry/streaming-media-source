@@ -47,15 +47,18 @@ under GPLv3 section 6; do not assume every dynamically linked library is
 automatically a System Library. Do not rely solely on a moving branch or
 an upstream homepage. Keep the source offer usable for as long as required.
 
-Keep the user experience self-contained by having the plugin fetch the
-appropriate official upstream yt-dlp and Deno assets directly, with user
-consent, verified integrity, platform-specific executables, and a private
-writable installation directory. Never silently replace the system tools.
-Keep system-runtime discovery as an alternative.
+For the initial module-only distribution, the user explicitly downloads
+official upstream executables using the dock links and places them in a
+private writable runtime directory. See the
+[runtime setup guide](https://github.com/myrqyry/streaming-media-source/blob/master/docs/runtime-setup.md).
+The user verifies the downloaded files against published checksums. No
+system PATH changes are required. The plugin does not download or
+redistribute these files on the user's behalf in this mode.
 
-The existing updater downloads yt-dlp from its official release but
-requires an existing bundled pair. First-run provisioning and
-cross-platform asset selection remain implementation work. The existing
+Automatic first-run provisioning remains optional future work. The
+existing updater remains specific to Linux x86_64 bundled installations.
+Windows and macOS asset instructions are prepared; native builds remain
+unqualified. The existing
 bundled archive is a local development/testing artifact, not a cleared
 public distribution. If we later host bundled third-party executables,
 first satisfy their exact corresponding-source and dependency-notice

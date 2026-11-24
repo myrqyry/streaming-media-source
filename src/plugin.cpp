@@ -229,7 +229,8 @@ struct Source {
     Media m;
     auto engine = runtime();
     if (!engine.ready()) {
-      m.error = "Media engine missing; install the bundled runtime package";
+      m.error = "Media engine missing; open Media engine options in the "
+                "Streaming Media dock";
       return m;
     }
     QStringList args = {"--ignore-config",
@@ -247,9 +248,10 @@ struct Source {
     QProcess p;
     p.setProgram(engine.extractor);
     blog(LOG_INFO, "[streaming-media] Media engine: %s (%s)",
-         engine.updated   ? "updated"
-         : engine.bundled ? "bundled"
-                          : "system",
+         engine.updated        ? "updated"
+         : engine.bundled      ? "bundled"
+         : engine.userProvided ? "user-provided"
+                               : "system",
          qPrintable(engine.engine));
     p.setArguments(args);
     p.start();

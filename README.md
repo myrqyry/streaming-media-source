@@ -30,6 +30,17 @@ desktop capture, listening port, or full-video download.
 - CMake and Qt6 Core/Widgets/Network and libobs/frontend API development
   headers for building.
 
+## Media engine setup
+
+The module-only build can use user-installed official executables without
+PATH configuration. In the Streaming Media dock, open the media engine
+menu, download yt-dlp and Deno, open the runtime folder, put the two
+executables there, and refresh engine status.
+
+See the [runtime setup guide](docs/runtime-setup.md) for direct downloads,
+SHA-256 verification and step-by-step instructions. Linux x86_64 is the
+verified target; the Windows and macOS links are for planned builds.
+
 ## Install a local test package
 
 First generate the Linux x86_64 bundled archive using the [build and install](#build-and-install)
@@ -322,7 +333,7 @@ temporary signed media URLs; redact before sharing.
 | Symptom | First check |
 | --- | --- |
 | Source is missing | Confirm native OBS 32.x and the module under `plugins/obs-streaming-media/bin/64bit/`. Restart OBS after installation. |
-| Media engine missing | Use the bundled package, or install a compatible yt-dlp and Deno/Node for the system-runtime build. |
+| Media engine missing | Follow the [runtime setup guide](docs/runtime-setup.md) or use a compatible existing system runtime. |
 | Video no longer resolves | Check for extractor updates in the dock, then retry. |
 | Update breaks resolution | Choose Use bundled extractor in the engine menu and retry. |
 | Playback stalls or has rendering issues | Try a lower resolution or disable hardware decoding; include the OBS/plugin versions and redacted logs in a bug report. |

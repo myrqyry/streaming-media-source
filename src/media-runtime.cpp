@@ -14,26 +14,33 @@ static QString executable(const QString &path) {
   QFileInfo f(path);
   return f.isFile() && f.isExecutable() ? f.absoluteFilePath() : QString{};
 }
+static QString executableName(const QString &name) {
+#ifdef Q_OS_WIN
+  return name + ".exe";
+#else
+  return name;
+#endif
+}
 MediaRuntime findMediaRuntime(const QString &bundle, const QStringList &paths,
                               bool systemFallback) {
   if (!bundle.isEmpty()) {
-    auto yt = executable(QDir(bundle).filePath("yt-dlp"));
-    auto deno = executable(QDir(bundle).filePath("deno"));
+    auto yt = executable(QDir(bundle).filePath(executableName("yt-dlp")));
+    auto deno = executable(QDir(bundle).filePath(executableName("deno")));
     if (!yt.isEmpty() && !deno.isEmpty())
       return {yt, deno, "deno", true};
   }
   auto find = [&](const QString &name) {
     for (const auto &dir : paths) {
-      auto p = executable(QDir(dir).filePath(name));
+      auto p = executable(QDir(dir).filePath(executableName(name)));
       if (!p.isEmpty())
         return p;
     }
     if (!systemFallback)
       return QString{};
-    auto p = QStandardPaths::findExecutable(name);
+    auto p = QStandardPaths::findExecutable(executableName(name));
     if (!p.isEmpty())
       return p;
-    p = executable(QDir::homePath() + "/.local/bin/" + name);
+    p = executable(QDir::homePath() + "/.local/bin/" + executableName(name));
     if (!p.isEmpty())
       return p;
     if (name == "node") {
@@ -119,14 +126,28 @@ QByteArray probeMediaHttps(const QString &url, bool hls,
   return {};
 }
 
-MediaRuntime selectMediaRuntime(const QString &bundle, const QString &managed) {
-  auto engine = findMediaRuntime(bundle);
-  if (engine.bundled) {
+QString manualRuntimeDirectory(const QString &managed) {
+  return managed.isEmpty() ? QString{} : QDir(managed).filePath("manual");
+}
+
+MediaRuntime selectMediaRuntime(const QString &bundle, const QString &managed,
+                                const QStringList &paths, bool systemFallback) {
+  auto engine = findMediaRuntime(bundle, {}, false);
+  if (engine.ready()) {
+#if defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
     auto updated = preferredRuntimeExecutable(bundle, managed);
     if (!updated.isEmpty() && updated != engine.extractor) {
       engine.extractor = updated;
       engine.updated = true;
     }
+#endif
+    return engine;
   }
-  return engine;
+  engine = findMediaRuntime(manualRuntimeDirectory(managed), {}, false);
+  if (engine.ready()) {
+    engine.bundled = false;
+    engine.userProvided = true;
+    return engine;
+  }
+  return findMediaRuntime({}, paths, systemFallback);
 }

@@ -9,6 +9,7 @@
 #include <QCache>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDrag>
 #include <QDropEvent>
@@ -436,9 +437,18 @@ class MediaDock : public QWidget {
   QThread *updateWorker = nullptr;
   std::shared_ptr<QString> updateResult;
   void refreshEngine() {
-    if (!updateWorker && engineStatus)
-      engineStatus->setText(
-          runtimeDisplayVersion(runtimeBundle, runtimeManaged));
+    if (updateWorker || !engineStatus)
+      return;
+    auto engine = selectMediaRuntime(runtimeBundle, runtimeManaged);
+    engineStatus->setText(
+        !engine.ready()       ? "Media engine missing"
+        : engine.userProvided ? "User-installed engine"
+        : engine.bundled ? runtimeDisplayVersion(runtimeBundle, runtimeManaged)
+                         : "System engine");
+    engineStatus->setToolTip(
+        engine.ready() ? "Media engine ready"
+                       : "Open the engine menu to download yt-dlp and Deno and "
+                         "open their installation folder.");
   }
   void checkEngine() {
     if (updateWorker || runtimeBundle.isEmpty() || runtimeManaged.isEmpty())
@@ -1091,6 +1101,38 @@ public:
                       "icon-media-restart");
     engineMenu->setObjectName("media-engine-menu");
     auto menu = new QMenu(engineMenu);
+    auto yt = menu->addAction("Download yt-dlp");
+    yt->setObjectName("media-engine-download-ytdlp");
+    auto deno = menu->addAction("Download Deno");
+    deno->setObjectName("media-engine-download-deno");
+    auto folder = menu->addAction("Open runtime folder");
+    folder->setObjectName("media-engine-open-folder");
+    auto refreshAction = menu->addAction("Refresh engine status");
+    refreshAction->setObjectName("media-engine-refresh");
+    auto guide = menu->addAction("Setup instructions");
+    guide->setObjectName("media-engine-guide");
+    connect(yt, &QAction::triggered, this, [] {
+      QDesktopServices::openUrl(
+          QUrl("https://github.com/yt-dlp/yt-dlp#release-files"));
+    });
+    connect(deno, &QAction::triggered, this, [] {
+      QDesktopServices::openUrl(
+          QUrl("https://github.com/denoland/deno/releases/latest"));
+    });
+    connect(folder, &QAction::triggered, this, [this] {
+      auto path = manualRuntimeDirectory(runtimeManaged);
+      if (path.isEmpty() || !QDir().mkpath(path) ||
+          !QDesktopServices::openUrl(QUrl::fromLocalFile(path)))
+        engineStatus->setText("Cannot open runtime folder");
+    });
+    connect(refreshAction, &QAction::triggered, this,
+            [this] { refreshEngine(); });
+    connect(guide, &QAction::triggered, this, [] {
+      QDesktopServices::openUrl(
+          QUrl("https://github.com/myrqyry/streaming-media-source/blob/master/"
+               "docs/runtime-setup.md"));
+    });
+    menu->addSeparator();
     auto check = menu->addAction("Check for extractor updates");
     check->setObjectName("media-engine-check");
     auto reset = menu->addAction("Use bundled extractor");
@@ -1106,11 +1148,19 @@ public:
       } else
         engineStatus->setText("Could not restore bundled extractor");
     });
-    connect(menu, &QMenu::aboutToShow, this, [this, check, reset] {
-      check->setEnabled(!runtimeBundle.isEmpty() && !runtimeManaged.isEmpty() &&
+    connect(menu, &QMenu::aboutToShow, this, [this, check, reset, folder] {
+      refreshEngine();
+      folder->setEnabled(!runtimeManaged.isEmpty());
+#if defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
+      auto bundled = findMediaRuntime(runtimeBundle, {}, false).ready();
+      check->setEnabled(bundled && !runtimeManaged.isEmpty() && !updateWorker);
+      reset->setEnabled(bundled &&
+                        !activeRuntimeVersion(runtimeManaged).isEmpty() &&
                         !updateWorker);
-      reset->setEnabled(!activeRuntimeVersion(runtimeManaged).isEmpty() &&
-                        !updateWorker);
+#else
+      check->setEnabled(false);
+      reset->setEnabled(false);
+#endif
     });
     engineMenu->setMenu(menu);
     engineMenu->setPopupMode(QToolButton::InstantPopup);
@@ -1200,6 +1250,7 @@ public:
   void showEvent(QShowEvent *e) override {
     QWidget::showEvent(e);
     scheduleTheme();
+    refreshEngine();
     thumbId.clear();
     refreshCount = 0;
     refresh();
