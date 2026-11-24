@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a playback, dock or runtime issue
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please redact temporary media URLs, authentication data, local paths,
+        and any private scene information from logs and screenshots.
+  - type: input
+    id: versions
+    attributes:
+      label: Plugin and OBS versions
+      placeholder: Streaming Media Source 0.5.1 / OBS 32.2.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system, architecture and OBS installation type
+      placeholder: Linux x86_64, native package
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include whether the issue involves playback, resizing, queue changes or engine updates.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostic information
+      description: Include the media engine version, hardware decoding setting, and relevant OBS log excerpt. Do not share signed media URLs or credentials.

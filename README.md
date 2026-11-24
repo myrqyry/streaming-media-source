@@ -6,6 +6,10 @@ The original URL, not an expiring media URL, is stored in scene settings.
 Playback uses OBS's existing FFmpeg media engine; there is no browser,
 desktop capture, listening port, or full-video download.
 
+<img src="docs/streaming-media-dock.png" alt="Streaming Media dock with video playback, visual queue and bundled media engine" width="308">
+
+*Version 0.5.1 in OBS 32.2 with the Colorway Fluffy Dark theme, using a disposable demo scene.*
+
 ## Requirements
 
 - OBS Studio 32.x, native Linux installation (development/verification target:
@@ -18,6 +22,22 @@ desktop capture, listening port, or full-video download.
   existing NVM layout. The same Qt HTTPS rendition validation is used.
 - CMake and Qt6 Core/Widgets/Network and libobs/frontend API development
   headers for building.
+
+## Install a local test package
+
+For a prepared Linux x86_64 bundled archive, close OBS and extract it into
+the per-user plugins directory:
+
+```sh
+mkdir -p "$HOME/.config/obs-studio/plugins"
+tar -xzf streaming-media-source-0.5.1-linux-x86_64-bundled.tar.gz \
+  -C "$HOME/.config/obs-studio/plugins"
+```
+
+Restart OBS, add **Streaming Media (YouTube)**, and open **Docks →
+Streaming Media**. The archive contains the plugin, extractor, Deno and
+runtime notices. No separate runtime setup or system-wide installation is
+required. Public binary releases are not yet available.
 
 ## Build and install
 
@@ -46,6 +66,16 @@ remains untouched. The next resolution uses the new engine without an OBS
 restart. Use the bundled extractor to roll back. Deno remains pinned.
 See [third-party runtime notices](third-party/README.md) and the release
 checklist before distributing binaries.
+
+To generate a local package after the build, use:
+
+```sh
+cpack --config build/CPackConfig.cmake -B build/packages
+```
+
+CPack produces a compressed archive and SHA-256 file. The system-runtime
+build produces a separately named archive without the bundled executables.
+Do not upload bundled archives until the redistribution review is complete.
 
 Restart OBS when convenient. In source properties, paste a YouTube URL and
 select maximum resolution, hardware decoding, playback speed and network
@@ -212,6 +242,20 @@ real X11 drag-reorder test in the normal playback smoke (requires Python
 Xlib). It validates that public titles and thumbnails load and that the
 actual persisted queue order changes. Test logs from FFmpeg may contain
 temporary signed media URLs; redact before sharing.
+
+## Troubleshooting
+
+| Symptom | First check |
+| --- | --- |
+| Source is missing | Confirm native OBS 32.x and the module under `plugins/obs-streaming-media/bin/64bit/`. Restart OBS after installation. |
+| Media engine missing | Use the bundled package, or install a compatible yt-dlp and Deno/Node for the system-runtime build. |
+| Video no longer resolves | Check for extractor updates in the dock, then retry. |
+| Update breaks resolution | Choose Use bundled extractor in the engine menu and retry. |
+| Playback stalls or has rendering issues | Try a lower resolution or disable hardware decoding; include the OBS/plugin versions and redacted logs in a bug report. |
+| Remote requests are rejected | Enable Accept WebSocket video requests on the intended source and use its UUID. |
+
+FFmpeg and OBS logs may contain expiring signed media URLs. Redact them,
+credentials, private scene information and local paths before sharing.
 
 ## Scope and limits
 

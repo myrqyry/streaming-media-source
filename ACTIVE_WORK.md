@@ -229,3 +229,23 @@ under third-party/ and staged with bundle. GPLv3+ standalone yt-dlp confirmed
 from upstream README; corresponding-source obligations and Deno dependency
 notices still need public distribution review. No public release, production
 install or push. Stage recorded in build/runtime-updater-stage-path.
+
+## v0.5.1 — package and repository checkpoint (2026-11-24)
+CPack generates a local Linux x86_64 TGZ with the correct
+obs-streaming-media/{bin/64bit,data/runtime} layout and SHA-256 sidecar.
+Bundled archive in build/packages/streaming-media-source-0.5.1-linux-x86_64-bundled.tar.gz
+(80 MiB). Checksum, executable permissions, notices and linked library
+resolution verified. Extracted archive smoke ran with empty PATH and fresh
+HOME; exit 0, 1080p video/audio, pause/seek/resume, metadata and queue
+reorder, natural EOF advancement, stop preservation, 43944 concurrent
+dimension queries and teardown passed. CTest 8/8. Captured current v0.5.1
+dock from isolated OBS 32.2/Colorway Fluffy Dark with disposable demo
+scene; clean process exit, OBS reported 3 memory leaks (not attributed).
+README screenshot, installation/troubleshooting, GitHub bug template
+added. Common credential-pattern scan across reachable commits returned
+no matches; historical machine-specific notes still require public
+review. Local package only; no release assets uploaded, no production
+installation, no change to repository visibility. Owner requested push
+to existing private remote. Public license choice, corresponding-source
+and Deno dependency obligations, and cross-distro ABI qualification remain
+open. No history rewrite.

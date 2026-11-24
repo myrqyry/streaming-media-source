@@ -23,16 +23,17 @@ Before a first public release:
   Deno remains pinned. Upstream license texts are included with local
   staged bundles; public distribution still needs corresponding-source
   compliance and the Deno dependency notice review.
-- Provide an installable Linux package with the supported OBS/Qt ABI and
-  reproducible build instructions. Current development target is OBS 32.x
-  native Linux, not Windows/macOS/Flatpak. Keep the source ID and install
-  module name stable across repository renames.
+- Local Linux x86_64 CPack TGZ package and SHA-256 checksum are implemented.
+  The extracted archive has passed real playback with an empty PATH on the
+  development machine; cross-distro ABI qualification is still required.
+  Current target is native OBS 32.x, not Windows/macOS/Flatpak. Keep the
+  source ID and install module name stable across repository renames.
 - Run deterministic CTest plus real playback, queue, injected decoder
   recovery, source resizing, WebSocket and source teardown verification.
   Validate production GPU decoding separately from Xvfb/software decoding.
-- Add a current dock screenshot from a disposable scene, an issue template
-  requesting OBS/plugin versions and redacted logs, and clear dependency
-  installation/troubleshooting instructions.
+- Completed: current v0.5.1 dock screenshot from a disposable OBS scene,
+  issue template with version and redaction guidance, local package
+  instructions and troubleshooting table.
 - Describe direct public-media playback accurately; do not promise
   universally ad-free video, access to restricted media, or supported
   providers/platforms that have not been verified. No account credentials
