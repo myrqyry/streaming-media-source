@@ -67,3 +67,25 @@ replacement of installed binary. Previous production crash investigation
 remains unresolved: 20:11 log ended after media resolution and preview spacing
 labels; exact saved video passed standalone hardware-enabled smoke, while
 an earlier distinct 20:07 crash recorded an Aftermarket fault.
+
+## Production crash recurrence (2026-11-23 21:02 CST)
+Production log 20-50-11: installed v0.3.0, source restored, UI Augment audio
+envelope attached, combined VOD resolved 20:50:23, final log 20:50:44 after
+four native OBS Preview spacing labels. Cinnamon removed the OBS tray icon
+20:54:59; no corresponding kernel fault or core recorded. This permits a
+hang/termination interpretation but does not establish either mechanism.
+Correct earlier attribution: 20:07 Aftermarket core module was in a disposable
+/tmp/aftermarket-layout-obs-smoke profile, not the production plugin path.
+20:19 and 20:22 cores show libobs X11 hotkey thread null reply dereference
+(offset e962e, obs-nix-x11.c key_pressed) during Qt application termination;
+not sufficient to explain latest production incident. Theme v0.3.1 remains
+uninstalled. No production profile or binary edits.
+Isolated full OBS 32.2 with installed v0.3.0, installed Aftermarket and saved
+YouTube URL/default hardware setting: authenticated GetMediaInputStatus
+responded 15/15, playback cursor progressed to 19833 ms, shutdown logged
+Freeing OBS context data. Not a reproduction of production crash: Xvfb,
+minimal scene, no production envelope attachment or full plugin/filter graph.
+Next discriminating evidence: whether production UI froze versus vanished;
+capture live all-thread stack on a hang before exit, or use matching core
+on spontaneous crash; test production source with HW off as a reversible
+A/B without removing saved source. No root cause or fix claimed.
