@@ -109,6 +109,11 @@ def native_config():
     raise RuntimeError(f"Unsupported native host: {host}/{arch}")
 
 
+def mac_arch_command(binary, target):
+    arch = target.removeprefix("macos-")
+    return ("lipo", binary, "-verify_arch", arch)
+
+
 def verify_stage(stage, target):
     if target == "windows-x64":
         binary = stage / MODULE / "bin/64bit" / f"{MODULE}.dll"
@@ -139,8 +144,7 @@ def verify_stage(stage, target):
         actual = {p for p in stage.rglob("*") if p.is_file()}
         if actual != expected:
             raise RuntimeError(f"Unexpected macOS install payload: {actual ^ expected}")
-        arch = target.removeprefix("macos-")
-        run("lipo", binary, "-verify_arch", arch)
+        run(*mac_arch_command(binary, target))
         run("otool", "-L", binary)
     for path, source in [(notices / "LICENSE", ROOT / "LICENSE"),
                          (notices / "licensing.md", ROOT / "docs/licensing.md")]:

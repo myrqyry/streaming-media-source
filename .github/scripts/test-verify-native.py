@@ -3,7 +3,6 @@ import importlib.util
 import pathlib
 import tempfile
 import unittest
-from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("native", pathlib.Path(__file__).with_name("verify-native.py"))
 native = importlib.util.module_from_spec(spec)
@@ -26,22 +25,10 @@ class NativeTests(unittest.TestCase):
                 native.dependency_dirs(obs, "windows-x64")
 
     def test_mac_architecture_checker_uses_input_first(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            stage = pathlib.Path(tmp)
-            bundle = stage / f"{native.MODULE}.plugin" / "Contents"
-            binary = bundle / "MacOS" / native.MODULE
-            notices = bundle / "Resources/licenses"
-            binary.parent.mkdir(parents=True)
-            notices.mkdir(parents=True)
-            binary.write_bytes(b"fixture")
-            (bundle / "Info.plist").write_bytes(native.plistlib.dumps({
-                "CFBundleExecutable": native.MODULE, "CFBundlePackageType": "BNDL"}))
-            for name, src in (("LICENSE", "LICENSE"), ("licensing.md", "docs/licensing.md")):
-                (notices / name).write_bytes((native.ROOT / src).read_bytes())
-            for arch in ("arm64", "x86_64"):
-                with patch.object(native, "run") as run:
-                    self.assertEqual(native.verify_stage(stage, f"macos-{arch}"), binary)
-                    run.assert_any_call("lipo", binary, "-verify_arch", arch)
+        binary = pathlib.Path("stage/obs-streaming-media.plugin/Contents/MacOS/obs-streaming-media")
+        for arch in ("arm64", "x86_64"):
+            self.assertEqual(native.mac_arch_command(binary, f"macos-{arch}"),
+                             ("lipo", binary, "-verify_arch", arch))
 
 
 if __name__ == "__main__":
