@@ -54,3 +54,16 @@ remain untouched. Next: Chatbus adapter/moderation and request attribution
 if desired, automatic stream recovery, richer queue metadata, hardware
 decode and multi-source qualification. No claims of viewer authentication
 or public request server.
+
+## 0.3.1 — theme integration (2026-11-23)
+Native OBS icon class mapping, state-only play/pause icon updates, coalesced
+theme/style/font/palette refresh, inherited typography, adaptive preview size
+and DPR-aware thumbnail scaling. Theme regression observed red on old dock
+(native class missing), green after implementation; 3/3 CTest. Real OBS
+32.2 disposable profile opened the dock with the actual Colorway Fluffy Dark
+theme; screenshot reviewed (native icons, text, inputs, sliders, queue).
+Isolated OBS exited successfully. No production theme/profile edits or
+replacement of installed binary. Previous production crash investigation
+remains unresolved: 20:11 log ended after media resolution and preview spacing
+labels; exact saved video passed standalone hardware-enabled smoke, while
+an earlier distinct 20:07 crash recorded an Aftermarket fault.

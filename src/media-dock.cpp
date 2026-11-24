@@ -4,7 +4,10 @@
 #include <QBuffer>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QEvent>
+#include <QFontMetrics>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QImageReader>
 #include <QLabel>
 #include <QLineEdit>
@@ -14,6 +17,7 @@
 #include <QNetworkRequest>
 #include <QPointer>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStyle>
@@ -61,6 +65,9 @@ QString stateText(enum obs_media_state state) {
   }
 }
 class MediaDock : public QWidget {
+  QVBoxLayout *mainLayout = nullptr;
+  QImage previewImage;
+  bool themeRefreshPending = false, themeReady = false;
   QComboBox *sources;
   QLineEdit *url;
   QLabel *thumbnail, *title, *status, *time, *count;
@@ -79,13 +86,85 @@ class MediaDock : public QWidget {
   bool seeking = false;
   int refreshCount = 0;
   Ref selected() { return sourceRef(sources->currentData().toString()); }
-  QToolButton *tool(QStyle::StandardPixmap icon, const QString &tip) {
+  void themeIcon(QToolButton *b, const char *themeClass,
+                 QStyle::StandardPixmap fallback, bool force = false) {
+    if (!force && b->property("class").toString() == QLatin1String(themeClass))
+      return;
+    b->setProperty("class", themeClass);
+    b->setIcon(b->style()->standardIcon(fallback, nullptr, b));
+    // OBS theme classes supply qproperty-icon. Match the native media toolbar:
+    // repolish only on state transitions or actual theme changes.
+    b->style()->unpolish(b);
+    b->style()->polish(b);
+    b->update();
+  }
+  QToolButton *tool(QStyle::StandardPixmap icon, const QString &tip,
+                    const char *themeClass) {
     auto b = new QToolButton(this);
-    b->setIcon(style()->standardIcon(icon));
+    b->setProperty("mediaFallbackIcon", int(icon));
+    themeIcon(b, themeClass, icon, true);
     b->setToolTip(tip);
     b->setAccessibleName(tip);
     b->setAutoRaise(true);
     return b;
+  }
+  void updatePlayIcon(bool force = false) {
+    bool playing = state == OBS_MEDIA_STATE_PLAYING;
+    auto fallback = playing ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay;
+    play->setProperty("mediaFallbackIcon", int(fallback));
+    themeIcon(play, playing ? "icon-media-pause" : "icon-media-play", fallback,
+              force);
+  }
+  void scalePreview() {
+    if (!themeReady)
+      return;
+    int w =
+        std::clamp(std::min(fontMetrics().height() * 6, width() / 3), 64, 160);
+    QSize size(w, w * 9 / 16);
+    if (thumbnail->size() != size)
+      thumbnail->setFixedSize(size);
+    if (!previewImage.isNull()) {
+      qreal dpr = thumbnail->devicePixelRatioF();
+      auto pix = QPixmap::fromImage(previewImage.scaled(
+          size * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+      pix.setDevicePixelRatio(dpr);
+      thumbnail->setPixmap(pix);
+    }
+  }
+  void applyTheme() {
+    if (!themeReady)
+      return;
+    auto metric = [&](QStyle::PixelMetric m, int fallback) {
+      int v = style()->pixelMetric(m, nullptr, this);
+      return v >= 0 ? v : fallback;
+    };
+    int margin = metric(QStyle::PM_LayoutLeftMargin, 8);
+    int spacing = metric(QStyle::PM_LayoutVerticalSpacing, 6);
+    mainLayout->setContentsMargins(margin, margin, margin, margin);
+    mainLayout->setSpacing(spacing);
+    int iconSize = std::max(12, metric(QStyle::PM_SmallIconSize, 16));
+    for (auto b : findChildren<QToolButton *>()) {
+      b->setIconSize(QSize(iconSize, iconSize));
+      if (b == play)
+        updatePlayIcon(true);
+      else if (b->property("mediaFallbackIcon").isValid()) {
+        auto cls = b->property("class").toString().toUtf8();
+        themeIcon(
+            b, cls.constData(),
+            QStyle::StandardPixmap(b->property("mediaFallbackIcon").toInt()),
+            true);
+      }
+    }
+    scalePreview();
+  }
+  void scheduleTheme() {
+    if (!themeReady || themeRefreshPending)
+      return;
+    themeRefreshPending = true;
+    QTimer::singleShot(0, this, [this] {
+      themeRefreshPending = false;
+      applyTheme();
+    });
   }
   void action(const QString &op, const QString &value = {}, int row = -1,
               int target = -1) {
@@ -163,6 +242,7 @@ class MediaDock : public QWidget {
       old->abort();
       old->deleteLater();
     }
+    previewImage = QImage{};
     thumbnail->setPixmap({});
     thumbnail->setText(id.isEmpty() ? "No video" : "Preview unavailable");
     if (id.isEmpty() || !isVisible())
@@ -191,11 +271,12 @@ class MediaDock : public QWidget {
           auto size = reader.size();
           if (size.isValid() && size.width() <= 1920 && size.height() <= 1080) {
             reader.setScaledSize(
-                size.scaled(thumbnail->size(), Qt::KeepAspectRatio));
+                size.scaled(QSize(320, 180), Qt::KeepAspectRatio));
             auto image = reader.read();
             if (!image.isNull()) {
               thumbnail->setText({});
-              thumbnail->setPixmap(QPixmap::fromImage(image));
+              previewImage = image;
+              scalePreview();
             }
           }
         }
@@ -284,9 +365,7 @@ class MediaDock : public QWidget {
       time->setText(clockText(pos) + " / " + clockText(duration));
     }
     timeline->setEnabled(present && duration > 0);
-    play->setIcon(style()->standardIcon(state == OBS_MEDIA_STATE_PLAYING
-                                            ? QStyle::SP_MediaPause
-                                            : QStyle::SP_MediaPlay));
+    updatePlayIcon();
     play->setToolTip(state == OBS_MEDIA_STATE_PLAYING ? "Pause" : "Play");
     for (auto b : {play, stop, retry})
       b->setEnabled(present);
@@ -310,6 +389,7 @@ public:
   MediaDock() {
     setObjectName("streaming-media-controls");
     auto layout = new QVBoxLayout(this);
+    mainLayout = layout;
     layout->setContentsMargins(8, 8, 8, 8);
     layout->setSpacing(6);
     sources = new QComboBox(this);
@@ -319,8 +399,9 @@ public:
     auto input = new QHBoxLayout;
     url = new QLineEdit(this);
     url->setObjectName("media-url");
-    url->setPlaceholderText("Paste YouTube URL");
+    url->setPlaceholderText("YouTube URL");
     url->setClearButtonEnabled(true);
+    url->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     load = new QPushButton("Play", this);
     append = new QPushButton("Queue", this);
     append->setObjectName("media-queue-add");
@@ -331,7 +412,7 @@ public:
     auto now = new QHBoxLayout;
     thumbnail = new QLabel("No video", this);
     thumbnail->setObjectName("media-thumbnail");
-    thumbnail->setFixedSize(112, 63);
+    thumbnail->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     thumbnail->setAlignment(Qt::AlignCenter);
     thumbnail->setFrameShape(QFrame::StyledPanel);
     now->addWidget(thumbnail);
@@ -341,10 +422,9 @@ public:
     title->setWordWrap(true);
     title->setTextFormat(Qt::PlainText);
     title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    QFont f = title->font();
-    f.setBold(true);
-    title->setFont(f);
+    title->setProperty("class", "text-bold");
     status = new QLabel(this);
+    status->setProperty("class", "text-muted");
     status->setWordWrap(true);
     status->setTextFormat(Qt::PlainText);
     status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
@@ -356,16 +436,28 @@ public:
     timeline->setRange(0, 10000);
     time = new QLabel("0:00 / 0:00", this);
     time->setAlignment(Qt::AlignRight);
+    time->setProperty("class", "text-muted");
     layout->addWidget(timeline);
     layout->addWidget(time);
     auto transport = new QHBoxLayout;
-    back = tool(QStyle::SP_MediaSeekBackward, "Back 10 seconds");
-    play = tool(QStyle::SP_MediaPlay, "Play");
-    stop = tool(QStyle::SP_MediaStop, "Stop");
-    forward = tool(QStyle::SP_MediaSeekForward, "Forward 10 seconds");
-    next = tool(QStyle::SP_MediaSkipForward, "Play next queued video");
+    back = new QToolButton(this);
+    back->setText("−10");
+    back->setToolTip("Back 10 seconds");
+    back->setAccessibleName("Back 10 seconds");
+    back->setAutoRaise(true);
+    play = tool(QStyle::SP_MediaPlay, "Play", "icon-media-play");
+    play->setObjectName("media-play");
+    stop = tool(QStyle::SP_MediaStop, "Stop", "icon-media-stop");
+    forward = new QToolButton(this);
+    forward->setText("+10");
+    forward->setToolTip("Forward 10 seconds");
+    forward->setAccessibleName("Forward 10 seconds");
+    forward->setAutoRaise(true);
+    next = tool(QStyle::SP_MediaSkipForward, "Play next queued video",
+                "icon-media-next");
     next->setObjectName("media-next");
-    retry = tool(QStyle::SP_BrowserReload, "Resolve and restart video");
+    retry = tool(QStyle::SP_BrowserReload, "Resolve and restart video",
+                 "icon-media-restart");
     for (auto b : {back, play, stop, forward, next, retry})
       transport->addWidget(b);
     transport->addStretch();
@@ -379,13 +471,13 @@ public:
     queue = new QListWidget(this);
     queue->setObjectName("media-queue-list");
     queue->setAlternatingRowColors(true);
-    queue->setMinimumHeight(60);
+    queue->setMinimumHeight(0);
     layout->addWidget(queue, 1);
     auto edits = new QHBoxLayout;
-    up = tool(QStyle::SP_ArrowUp, "Move up");
+    up = tool(QStyle::SP_ArrowUp, "Move up", "icon-up");
     up->setObjectName("media-queue-up");
-    down = tool(QStyle::SP_ArrowDown, "Move down");
-    remove = tool(QStyle::SP_TrashIcon, "Remove queued video");
+    down = tool(QStyle::SP_ArrowDown, "Move down", "icon-down");
+    remove = tool(QStyle::SP_TrashIcon, "Remove queued video", "icon-trash");
     remove->setObjectName("media-queue-remove");
     for (auto b : {up, down, remove})
       edits->addWidget(b);
@@ -452,11 +544,27 @@ public:
     connect(autoplay, &QCheckBox::toggled, this, [this](bool checked) {
       action("autoplay", {}, -1, checked ? 1 : 0);
     });
+    themeReady = true;
+    applyTheme();
     timer->start();
     refresh();
   }
+  void changeEvent(QEvent *e) override {
+    QWidget::changeEvent(e);
+    if (e->type() == QEvent::StyleChange ||
+        e->type() == QEvent::PaletteChange || e->type() == QEvent::FontChange ||
+        e->type() == QEvent::ApplicationFontChange ||
+        e->type() == QEvent::ApplicationPaletteChange)
+      scheduleTheme();
+  }
+  void resizeEvent(QResizeEvent *e) override {
+    QWidget::resizeEvent(e);
+    scalePreview();
+  }
+  void themeChanged() { scheduleTheme(); }
   void showEvent(QShowEvent *e) override {
     QWidget::showEvent(e);
+    scheduleTheme();
     thumbId.clear();
     refreshCount = 0;
     refresh();
@@ -470,6 +578,8 @@ public:
 QPointer<MediaDock> dock;
 bool registered = false;
 void frontendEvent(enum obs_frontend_event event, void *) {
+  if (event == OBS_FRONTEND_EVENT_THEME_CHANGED && dock)
+    dock->themeChanged();
   if (event == OBS_FRONTEND_EVENT_EXIT) {
     if (dock)
       dock->shutdown();

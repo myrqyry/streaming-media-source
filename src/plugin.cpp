@@ -771,7 +771,7 @@ bool obs_module_load(void) {
   i.icon_type = OBS_ICON_TYPE_MEDIA;
   obs_register_source(&i);
   registerMediaDock();
-  blog(LOG_INFO, "[streaming-media] Loaded 0.3.0");
+  blog(LOG_INFO, "[streaming-media] Loaded 0.3.1");
   return true;
 }
 

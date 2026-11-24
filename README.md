@@ -45,6 +45,21 @@ observed natural VOD end. Stop leaves upcoming entries intact. A premature
 decoder end or error preserves the queue and surfaces Retry, which resolves
 a fresh URL. Automatic resume/recovery is not yet implemented.
 
+### Theme integration (0.3.1)
+
+The dock uses OBS's native media and utility icon classes, theme-provided
+typography, inherited widget palettes and style metrics. Its icons refresh
+on OBS theme changes and Qt style/palette/font changes; playback polling
+does not overwrite theme icons. Preview dimensions adapt to font size and
+dock width, and the cached thumbnail is scaled at the device pixel ratio.
+Ten-second seek buttons use explicit −10/+10 labels rather than ambiguous
+playlist icons. The Qt fallback supports styles that lack OBS icon classes.
+
+The deterministic dock-theme-test checks live stylesheet icon replacement
+and responsive preview sizing without a live video. The actual dock has also
+been visually inspected in a disposable OBS 32.2 profile with Colorway Fluffy
+Dark. This does not qualify every third-party theme or display scale.
+
 ## WebSocket video requests (0.3)
 
 Uses OBS WebSocket 5.x's existing authenticated server and
