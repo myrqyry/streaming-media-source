@@ -138,3 +138,30 @@ pause/seek/resume, dock thumbnail, queue edit/next/auto-next/stop preservation
 all passed; 55493 concurrent dimension queries, source teardown passed.
 CTest 4/4. Installed atomically after backup, without restarting active OBS.
 Production retest still required on the full plugin graph.
+
+## v0.4.0 — bounded playback recovery
+Renamed remote now points to myrqyry/streaming-media-source, verified private.
+Existing module name and source ID retained for scene compatibility.
+Recovery enabled by default, configurable per source; two attempts per
+selected video, one/three second backoff on the video tick. Fresh resolution,
+resume VOD near the last observed position with output gated until seek
+confirmation; live retry has no seek. Manual stop/restart/change cancels
+scheduled recovery; queue remains intact. No initial extraction retry,
+silent-stall watchdog or general provider expansion yet.
+Deterministic recovery test red before implementation, then CTest 5/5.
+Actual libobs smoke with SMOKE_RECOVERY=1 exited 0: forced unexpected stop
+of private decoder at 50866 ms, fresh resolution and restored position/mixer
+audio, second attempt cancelled by parent Stop, queue intact, 33895
+dimension queries, source teardown. This was a decoder interruption, not
+a real network outage. Normal live-network smoke exited 0: 1080p picture
+and audio, pause/seek/resume, dock thumbnail, queue edit/next/auto-next,
+stop preservation, 55848 concurrent dimension queries and teardown.
+Previous v0.3.2 installed full OBS resize test: actual mouse source resize
+1.0 to 2.035 and back to 1.002, window-border resize and additional window
+size changes while playback continued; clean exit. Fit to Screen shortcut
+not separately verified.
+Public release possibility raised, not authorized. RELEASE_CHECKLIST.md
+records licensing, history privacy, packaging, validation and documentation
+gates. Repository remains private. No new install or push in this slice.
+Next: visual queue metadata and compact playlist controls; public package
+and screenshot/issue documentation after license/history review.

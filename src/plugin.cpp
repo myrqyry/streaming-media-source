@@ -1,6 +1,7 @@
 #include "audio-handoff.hpp"
 #include "media-dock.hpp"
 #include "media-queue.hpp"
+#include "media-recovery.hpp"
 #include "media-websocket.hpp"
 #include "resolver.hpp"
 #include <QDir>
@@ -34,6 +35,8 @@ struct Request {
   int speed = 100;
   int buffer = 8;
   bool restart = false;
+  bool recover = true;
+  int64_t resumeMs = 0;
   uint64_t id = 0;
 };
 struct QueueCommand {
@@ -87,6 +90,15 @@ struct Source {
   enum obs_media_state lastChildState = OBS_MEDIA_STATE_NONE;
   bool played = false, sessionLive = false;
   VodProgress progress;
+  RecoveryPlan recovery;
+  std::atomic<bool> resumeGate{false};
+  int64_t resumeTarget = 0, resumeDeadline = 0;
+  bool resumeIssued = false;
+  static int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  }
   int64_t lastDuration = 0;
   explicit Source(obs_source_t *s)
       : parent(s), temp(QDir::tempPath() + "/obs-streaming-media-XXXXXX") {}
@@ -122,7 +134,7 @@ struct Source {
   static void audio(void *data, obs_source_t *, const struct audio_data *a,
                     bool muted) {
     auto s = static_cast<Source *>(data);
-    if (!s->accept || muted || !a->frames)
+    if (!s->accept || s->resumeGate || muted || !a->frames)
       return;
     obs_audio_info info{};
     if (!obs_get_audio_info(&info))
@@ -133,7 +145,7 @@ struct Source {
                             info.samples_per_sec, info.speakers, gen);
   }
   void forwardAudio(const AudioPacket &p) {
-    if (closing || !accept || p.generation != epoch)
+    if (closing || !accept || resumeGate || p.generation != epoch)
       return;
     obs_source_audio out{};
     out.frames = p.frames;
@@ -158,8 +170,14 @@ struct Source {
     obs_source_update(child, blank);
     obs_data_release(blank);
   }
-  void cancel() {
+  void cancel(bool preserveRecovery = false) {
     accept = false;
+    resumeGate = false;
+    resumeTarget = 0;
+    resumeDeadline = 0;
+    resumeIssued = false;
+    if (!preserveRecovery)
+      recovery.reset();
     auto gen = ++epoch;
     if (audioHandoff)
       audioHandoff->reset(gen);
@@ -185,8 +203,10 @@ struct Source {
     }
     clearChild();
   }
-  void queue(Request req) {
-    cancel();
+  void queue(Request req, bool retry = false) {
+    cancel(retry);
+    resumeTarget = req.resumeMs;
+    resumeGate = resumeTarget > 0;
     if (req.url.isEmpty())
       return;
     if (!validYoutube(req.url)) {
@@ -341,8 +361,28 @@ struct Source {
       std::lock_guard<std::mutex> l(mutex);
       error = message;
     }
+    resumeGate = false;
     loading = false;
     failed = true;
+  }
+  bool scheduleRecovery(int64_t position, bool live) {
+    bool enabled;
+    {
+      std::lock_guard<std::mutex> l(mutex);
+      enabled = current.recover;
+    }
+    if (!recovery.schedule(nowMs(), position, live, enabled))
+      return false;
+    auto attempt = recovery.attempts();
+    cancel(true);
+    loading = true;
+    {
+      std::lock_guard<std::mutex> l(mutex);
+      error = QString("Reconnecting · attempt %1 of 2").arg(attempt);
+    }
+    blog(LOG_INFO, "[streaming-media] Scheduling recovery attempt %d of 2",
+         attempt);
+    return true;
   }
   void enqueue(QueueCommand cmd) {
     std::lock_guard<std::mutex> l(mutex);
@@ -424,17 +464,37 @@ struct Source {
       auto pos = obs_source_media_get_time(child),
            dur = obs_source_media_get_duration(child);
       bool endSignal = decoderEnded.exchange(false);
+      if (resumeGate && !endSignal && st == OBS_MEDIA_STATE_PLAYING &&
+          pos > 0 && dur > 0 && videoWidth > 0) {
+        if (!resumeIssued) {
+          resumeTarget = std::clamp<int64_t>(resumeTarget, 0,
+                                             std::max<int64_t>(0, dur - 1000));
+          progress.seek(resumeTarget);
+          obs_source_media_set_time(child, resumeTarget);
+          resumeIssued = true;
+          resumeDeadline = nowMs() + 18000;
+        } else if (std::abs(pos - resumeTarget) <= 2000) {
+          resumeGate = false;
+          resumeTarget = 0;
+          resumeIssued = false;
+          blog(LOG_INFO, "[streaming-media] Recovered VOD playback position");
+        }
+      }
+      bool resumeTimeout =
+          resumeGate && resumeDeadline > 0 && nowMs() >= resumeDeadline;
+      bool unexpectedStop = played && st == OBS_MEDIA_STATE_STOPPED;
+
       if (dur > 0)
         lastDuration = dur;
       if (pos > 0 && !endSignal && st != OBS_MEDIA_STATE_ENDED &&
           st != OBS_MEDIA_STATE_ERROR)
         progress.observe(pos);
-      if (st == OBS_MEDIA_STATE_PLAYING && !played && pos > 0 &&
+      if (st == OBS_MEDIA_STATE_PLAYING && !resumeGate && !played && pos > 0 &&
           videoWidth.load() > 0) {
         played = true;
         obs_source_media_started(parent);
       }
-      if (endSignal ||
+      if (resumeTimeout || unexpectedStop || endSignal ||
           ((st == OBS_MEDIA_STATE_ENDED || st == OBS_MEDIA_STATE_ERROR) &&
            lastChildState != st)) {
         ended = (endSignal || st == OBS_MEDIA_STATE_ENDED) && played &&
@@ -452,7 +512,12 @@ struct Source {
           finished = true;
           obs_source_media_ended(parent);
         } else {
-          fail("Playback interrupted; use Retry to resolve fresh media");
+          auto position = resumeGate ? resumeTarget : progress.position();
+          if (!(played || recovery.attempts() > 0) ||
+              !scheduleRecovery(position, sessionLive)) {
+            resumeGate = false;
+            fail("Playback interrupted; use Retry to resolve fresh media");
+          }
         }
       }
       lastChildState = st;
@@ -509,8 +574,12 @@ struct Source {
       auto patch = obs_data_create();
       obs_data_set_string(patch, "queue", qPrintable(q.serialize()));
       obs_data_set_bool(patch, "auto_advance", autoAdvance);
-      if (load)
+      if (load) {
+        // A manual selection wins over a scheduled retry.
+        if (recovery.waiting())
+          cancel();
         obs_data_set_string(patch, "url", qPrintable(url));
+      }
       obs_source_update(parent, patch);
       obs_data_release(patch);
       if (load && url == initialUrl)
@@ -529,9 +598,25 @@ struct Source {
       waitingDecoder = false;
       decoderEnded = false;
       accept = true;
+      if (resumeGate)
+        resumeDeadline = nowMs() + 25000;
       loading = false;
     }
     processQueue();
+    if (auto attempt = recovery.take(nowMs())) {
+      Request req;
+      {
+        std::lock_guard<std::mutex> l(mutex);
+        req = current;
+      }
+      if (req.recover) {
+        req.resumeMs = attempt->position;
+        queue(req, true);
+        std::lock_guard<std::mutex> l(mutex);
+        error = QString("Reconnecting · attempt %1 of 2").arg(attempt->attempt);
+      } else
+        cancel();
+    }
     std::optional<Result> r;
     {
       std::lock_guard<std::mutex> l(mutex);
@@ -543,7 +628,10 @@ struct Source {
     if (!r || epoch != r->req.id)
       return;
     if (!r->media.error.isEmpty() || !child) {
-      fail(r->media.error);
+      if (!recovery.attempts() || !scheduleRecovery(r->req.resumeMs, false)) {
+        resumeGate = false;
+        fail(r->media.error);
+      }
       blog(LOG_WARNING, "[streaming-media] %s", qPrintable(r->media.error));
       return;
     }
@@ -618,6 +706,10 @@ struct Source {
       error.clear();
     }
     sessionLive = r->media.live;
+    if (sessionLive) {
+      resumeGate = false;
+      resumeTarget = 0;
+    }
     decoderEnded = false;
     failed = false;
     blog(LOG_INFO, "[streaming-media] YouTube media resolved (%s, %s)",
@@ -634,6 +726,7 @@ struct Source {
     r.speed = int(obs_data_get_int(d, "speed"));
     r.buffer = int(obs_data_get_int(d, "buffer"));
     r.restart = obs_data_get_bool(d, "restart");
+    r.recover = obs_data_get_bool(d, "auto_recover");
     bool changed;
     {
       std::lock_guard<std::mutex> l(mutex);
@@ -644,6 +737,8 @@ struct Source {
     }
     if (changed)
       queue(r);
+    else if (!r.recover && recovery.waiting())
+      cancel();
   }
   void reload() {
     Request r;
@@ -661,6 +756,7 @@ void defaults(obs_data_t *s) {
   obs_data_set_default_int(s, "speed", 100);
   obs_data_set_default_int(s, "buffer", 8);
   obs_data_set_default_bool(s, "restart", false);
+  obs_data_set_default_bool(s, "auto_recover", true);
   obs_data_set_default_string(s, "queue", "[]");
   obs_data_set_default_bool(s, "auto_advance", false);
   obs_data_set_default_bool(s, "remote_requests", false);
@@ -683,6 +779,7 @@ obs_properties_t *properties(void *) {
       obs_properties_add_int_slider(p, "buffer", "Network buffer", 0, 16, 1);
   obs_property_int_set_suffix(buffer, " MB");
   obs_properties_add_bool(p, "restart", "Restart on scene activation");
+  obs_properties_add_bool(p, "auto_recover", "Recover interrupted playback");
   obs_properties_add_bool(p, "remote_requests",
                           "Accept WebSocket video requests");
   return p;
@@ -741,7 +838,7 @@ void update(void *p, obs_data_t *s) { self(p)->update(s); }
 void tick(void *p, float) { self(p)->tick(); }
 void render(void *p, gs_effect_t *) {
   auto s = self(p);
-  if (s->accept)
+  if (s->accept && !s->resumeGate)
     obs_source_video_render(s->child);
 }
 uint32_t width(void *p) {
@@ -762,7 +859,7 @@ void children(void *p, obs_source_enum_proc_t cb, void *param) {
 }
 enum obs_media_state state(void *p) {
   auto s = self(p);
-  if (s->loading)
+  if (s->loading || s->resumeGate)
     return OBS_MEDIA_STATE_OPENING;
   if (s->failed)
     return OBS_MEDIA_STATE_ERROR;
@@ -784,7 +881,7 @@ int64_t time(void *p) {
 }
 void seek(void *p, int64_t ms) {
   auto s = self(p);
-  if (s->accept) {
+  if (s->accept && !s->resumeGate) {
     s->progress.seek(ms);
     obs_source_media_set_time(s->child, ms);
   }
@@ -794,9 +891,9 @@ void stop(void *p) { self(p)->cancel(); }
 void next(void *p) { self(p)->enqueue({"next", {}, -1, -1}); }
 void pause(void *p, bool paused) {
   auto s = self(p);
-  if (s->accept)
+  if (s->accept && !s->resumeGate)
     obs_source_media_play_pause(s->child, paused);
-  else if (!paused && !s->loading)
+  else if (!paused && !s->loading && !s->resumeGate)
     s->reload();
 }
 void activate(void *p) {
@@ -841,7 +938,7 @@ bool obs_module_load(void) {
   i.icon_type = OBS_ICON_TYPE_MEDIA;
   obs_register_source(&i);
   registerMediaDock();
-  blog(LOG_INFO, "[streaming-media] Loaded 0.3.2");
+  blog(LOG_INFO, "[streaming-media] Loaded 0.4.0");
   return true;
 }
 

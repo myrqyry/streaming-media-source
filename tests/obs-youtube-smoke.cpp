@@ -231,9 +231,67 @@ int main(int argc, char **argv) {
           thumbnailReady);
   if (widgetReady)
     dock->grab().save("build/dock-widget-preview.png");
+  const bool recoveryMode = qEnvironmentVariableIntValue("SMOKE_RECOVERY") != 0;
+  bool recoveryPass = false;
   bool queueEdit = false, nextPlayback = false, stopped = false,
        autoNext = false;
-  if (playing && pause && seek && resume && widgetReady) {
+  if (recoveryMode && playing && pause && seek && resume && widgetReady) {
+    // Simulate an unexpected decoder stop through the real libobs child
+    // transport. This is not a simulated network outage.
+    obs_source_t *child = nullptr;
+    obs_source_enum_active_sources(
+        s,
+        [](obs_source_t *, obs_source_t *c, void *param) {
+          auto out = static_cast<obs_source_t **>(param);
+          if (!*out)
+            *out = obs_source_get_ref(c);
+        },
+        &child);
+    const char *upcoming = "https://youtu.be/jNQXAC9IVRw";
+    queueCommand(s, "append", upcoming);
+    bool appended =
+        until(3, [&] { return queued(s) == QStringList{upcoming}; });
+    auto oldPos = obs_source_media_get_time(s);
+    auto n = mixed.load();
+    bool reconnect = false, resumed = false, cancelled = false;
+    if (child && appended) {
+      obs_source_media_stop(child);
+      reconnect = until(5, [&] {
+        return obs_source_media_get_state(s) == OBS_MEDIA_STATE_OPENING;
+      });
+      resumed =
+          reconnect && until(65, [&] {
+            auto pos = obs_source_media_get_time(s);
+            return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+                   std::abs(pos - oldPos) < 5000 && mixed > n + 15;
+          });
+      if (resumed) {
+        obs_source_media_stop(child);
+        bool waiting = until(5, [&] {
+          return obs_source_media_get_state(s) == OBS_MEDIA_STATE_OPENING;
+        });
+        obs_source_media_stop(s);
+        cancelled =
+            waiting && until(3, [&] {
+              return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+            });
+        for (int i = 0; i < 45; ++i) {
+          pump();
+          std::this_thread::sleep_for(100ms);
+        }
+        cancelled = cancelled &&
+                    obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+      }
+      obs_source_release(child);
+    }
+    bool preserved = queued(s) == QStringList{upcoming};
+    fprintf(stderr,
+            "RECOVERY reconnect=%d resumed=%d cancelled=%d queue=%d "
+            "original_position=%lld\n",
+            reconnect, resumed, cancelled, preserved, (long long)oldPos);
+    recoveryPass = reconnect && resumed && cancelled && preserved;
+  }
+  if (!recoveryMode && playing && pause && seek && resume && widgetReady) {
     const char *other = "https://youtu.be/aqz-KE-bpKQ";
     const char *third = "https://youtu.be/jNQXAC9IVRw";
     entry->setText(third);
@@ -345,8 +403,10 @@ int main(int argc, char **argv) {
   pump();
   obs_shutdown();
   return dimensionQueries > 100 && released && playing && pause && seek &&
-                 resume && widgetReady && queueEdit && nextPlayback &&
-                 stopped && autoNext
+                 resume && widgetReady &&
+                 (recoveryMode
+                      ? recoveryPass
+                      : (queueEdit && nextPlayback && stopped && autoNext))
              ? 0
              : 1;
 }

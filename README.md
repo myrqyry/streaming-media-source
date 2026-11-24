@@ -1,4 +1,4 @@
-# Streaming Media for OBS
+# Streaming Media Source for OBS
 
 A standalone native OBS source for browser-free YouTube playback. Paste a
 public YouTube video URL into **Sources → Streaming Media (YouTube)**.
@@ -28,7 +28,7 @@ cmake --install build --prefix "$HOME/.config/obs-studio/plugins/obs-streaming-m
 Restart OBS when convenient. In source properties, paste a YouTube URL and
 select maximum resolution, hardware decoding, playback speed and network
 buffer. The source has OBS's normal media controls. Restart resolves a
-fresh media URL; expired URLs and extraction errors can require a restart.
+fresh media URL; expired URLs and extraction errors can require a fresh resolution.
 Quality is a cap, not a guarantee: when separate renditions are unavailable,
 the resolver may select a lower-quality combined video/audio stream.
 
@@ -43,7 +43,25 @@ Double-click an item to play it, or use the arrows and remove button.
 Auto advance is off by default; when enabled it advances only after an
 observed natural VOD end. Stop leaves upcoming entries intact. A premature
 decoder end or error preserves the queue and surfaces Retry, which resolves
-a fresh URL. Automatic resume/recovery is not yet implemented.
+a fresh URL. Enable or disable automatic recovery in source properties
+(**Recover interrupted playback**, enabled by default).
+
+### Playback recovery (0.4)
+
+After playback has started, an unexpected decoder stop, early end or error
+schedules a fresh resolution. A selected video has at most two automatic
+attempts, with one- and three-second backoff delays. A recovered VOD seeks
+back to its last observed playback position before admitting picture and
+audio; live streams, where supported, reconnect at the live position.
+A failed recovery resolution uses the remaining retry budget. Initial
+extraction errors do not automatically retry. Stop, manual restart and
+selecting another video cancel pending recovery; the upcoming queue is
+not consumed by an interruption. The Retry button still restarts from
+the beginning and grants a new retry budget.
+
+Recovery is driven by decoder state changes; silent stalls without a
+terminal state are not yet detected. A recovery may fail if the network
+or provider remains unavailable.
 
 ### Theme integration (0.3.1)
 
@@ -142,7 +160,12 @@ xvfb-run -a timeout 200 build/obs-youtube-smoke \
 
 This network-dependent isolated libobs test checks actual rendered pixels,
 nonzero source and mixed audio, pause, seek and resume; actual Qt widget thumbnail, queue editing, next playback, natural EOF auto advance, stop preservation and teardown. It is intentionally
-separate from the deterministic CTest suite. Test logs from FFmpeg may contain
+separate from the deterministic CTest suite. To exercise recovery, run
+the same command with `SMOKE_RECOVERY=1` in the environment: this stops
+the actual private FFmpeg decoder mid-video, checks fresh resolution,
+position and mixer audio recovery, and cancels a second scheduled retry
+using the parent Stop action. This is an injected decoder interruption,
+not a simulated network outage. Test logs from FFmpeg may contain
 temporary signed media URLs; redact before sharing.
 
 ## Scope and limits
