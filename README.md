@@ -27,23 +27,34 @@ does not request video renditions or expose video resolution controls.
 | Provider | Supported input |
 | --- | --- |
 | YouTube | Public video URLs with dedicated HTTPS audio; YouTube playlist import |
-| SoundCloud | Public individual track URLs with supported progressive MP3 audio |
-| Bandcamp | Public individual track URLs with a standard MP3 streaming rendition |
+| SoundCloud | Public tracks with progressive MP3 or supported unencrypted AAC HLS; public set import |
+| Bandcamp | Public tracks with a standard MP3 streaming rendition; public album import |
 | Spotify | Not supported: no direct full-track audio stream is exposed by its official playback API |
 
 Audio extraction validates exact provider identity, HTTPS CDN hosts, dedicated
 audio formats and reachable renditions. It does not use cookies, download
 purchased albums, circumvent access restrictions or fall back to video decoding.
-SoundCloud sets, Bandcamp albums, live audio/HLS and additional CDN coverage
-are future qualification work. Only stream music for which you have the
-necessary rights.
+Use Play to select the first imported entry and prepend the rest, or Queue
+to append without interrupting playback. Imports are bounded to 100 upcoming
+entries and preserve the existing queue. Unsupported URLs are skipped.
+Flat collection metadata may not reveal DRM, availability or audio format
+until a track is resolved for playback. Remove unplayable entries or select
+the next track manually; automatic skipping on resolution failure is not
+qualified. Live audio and additional CDN coverage remain future work.
+Only stream music for which you have the necessary rights.
 
 Real Linux OBS 32.2 smoke tests passed for YouTube, SoundCloud and Bandcamp,
 including mixed-provider automatic advancement, artwork, pause, seek, resume,
 mixer audio and zero rendered video frames. Cross-platform playback, OBS 33,
 audio recovery after interruption and live audio are not yet qualified.
-YouTube playlist import and remote requests reuse existing code but were not
-separately smoke-tested with the audio source.
+Real audio-source imports of an eleven-track Bandcamp album and a four-video
+YouTube playlist passed queueing, cancellation, metadata and first-track
+playback. SoundCloud set imports queued supported URL entries, but full
+collection playback and metadata tests did not pass. One sample began with a
+DRM-protected track. Another contained unsupported API-only track URLs.
+Unencrypted SoundCloud AAC HLS playback, indexed seeking, natural EOF and
+advancement to Bandcamp passed; the full smoke failed its artwork assertion.
+Remote requests in audio mode are not yet separately qualified.
 
 ## Requirements
 

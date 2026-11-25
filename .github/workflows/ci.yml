@@ -3,7 +3,7 @@ name: Build and test
 on:
   pull_request:
   push:
-    branches: [main, master, ci/native-platforms, feature/twitch-media]
+    branches: [main, master, ci/native-platforms, feature/twitch-media, feature/streaming-audio]
   workflow_dispatch:
 
 permissions:

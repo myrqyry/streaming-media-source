@@ -9,7 +9,14 @@ published.
   queue; public YouTube, SoundCloud and Bandcamp tracks.
 - Verified real playback, seek, pause/resume and cross-provider automatic
   advancement on Linux OBS 32.2, with zero video frames.
-- Spotify, collection imports outside YouTube and live audio remain unsupported.
+- Add public SoundCloud set and Bandcamp album imports using the existing
+  bounded queue. Bandcamp and YouTube audio-mode imports passed live tests;
+  SoundCloud import queueing passed, but full metadata/playback qualification
+  remains incomplete.
+- Support unencrypted SoundCloud fragmented-MP4 AAC HLS with validated
+  manifests and indexed seeking; mixer playback, transport and EOF advancement
+  passed. Artwork was unavailable in the HLS smoke.
+- Spotify and live audio remain unsupported.
 
 ## Unreleased — Twitch and Kick providers
 

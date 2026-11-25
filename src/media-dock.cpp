@@ -396,11 +396,13 @@ class MediaDock : public QWidget {
     auto p = new QProcess(this);
     importProcess = p;
     p->setProgram(engine.extractor);
+    auto extractor = playlistExtractor(link);
     p->setArguments({"--ignore-config", "--flat-playlist", "--playlist-end",
                      "101", "--dump-single-json", "--skip-download",
                      "--no-warnings", "--no-progress", "--socket-timeout", "10",
                      "--retries", "1", "--no-js-runtimes", "--js-runtimes",
-                     engine.engine + ":" + engine.js, "--", link});
+                     engine.engine + ":" + engine.js, "--use-extractors",
+                     extractor, "--", link});
     auto drain = [this, p] {
       if (importProcess != p)
         return;
@@ -418,7 +420,7 @@ class MediaDock : public QWidget {
                 cancelImport("Cannot start media engine");
             });
     connect(p, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [this, p, drain](int code, QProcess::ExitStatus exit) {
+            [this, p, drain, link](int code, QProcess::ExitStatus exit) {
               if (importProcess != p)
                 return;
               drain();
@@ -426,11 +428,11 @@ class MediaDock : public QWidget {
                 return;
               importProcess = nullptr;
               p->deleteLater();
-              auto data = parseImportedPlaylist(importBytes);
+              auto data = parseImportedPlaylist(importBytes, link);
               importBytes.clear();
               if (code != 0 || exit != QProcess::NormalExit ||
                   data.entries.isEmpty()) {
-                importMessage("No available playlist videos found");
+                importMessage("No available playlist entries found");
                 return;
               }
               auto s = sourceRef(importSource);
@@ -442,14 +444,22 @@ class MediaDock : public QWidget {
               QJsonArray urls;
               for (const auto &entry : data.entries) {
                 urls.append(entry.url);
-                auto id = videoId(entry.url);
+                auto id = cacheKey(entry.url);
                 auto cached = playlistCache.object(id);
                 if (!cached) {
                   cached = new CachedPlaylistItem;
                   playlistCache.insert(id, cached);
                 }
-                cached->metadata = entry.metadata;
-                cached->titleDone = !entry.metadata.title.isEmpty();
+                // Preserve richer metadata already obtained for a played or
+                // queued track.
+                if (!cached->titleDone) {
+                  cached->metadata = entry.metadata;
+                  cached->titleDone =
+                      !entry.metadata.title.isEmpty() &&
+                      (mediaProvider(entry.url) == MediaProvider::YouTube ||
+                       (entry.metadata.durationMs >= 0 &&
+                        !entry.metadata.author.isEmpty()));
+                }
               }
               importFound = data.entries.size();
               importTotal = data.total;
@@ -670,7 +680,11 @@ class MediaDock : public QWidget {
     auto value = url->text().trimmed();
     if (importProcess || !importReceipt.isEmpty())
       return;
-    auto playlist = canonicalPlaylistUrl(value);
+    auto selectedSource = selected();
+    bool audioSource =
+        selectedSource && QString::fromUtf8(obs_source_get_unversioned_id(
+                              selectedSource.get())) == "streaming_media_audio";
+    auto playlist = canonicalPlaylistUrl(value, audioSource);
     auto id = videoId(value);
     if (!playlist.isEmpty()) {
       bool entire = id.isEmpty();

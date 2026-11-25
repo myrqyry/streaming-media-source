@@ -65,6 +65,34 @@ int main(int argc, char **argv) {
             MediaProvider::YouTube)
                 .direct == "https://r.googlevideo.com/audio",
         "audio only excludes video and DRM");
+  const QString scHls =
+      "https://playback.media-streaming.soundcloud.cloud/track.m3u8";
+  QByteArray aac =
+      R"({"extractor_key":"Soundcloud","formats":[{"url":"https://playback.media-streaming.soundcloud.cloud/track.m3u8","protocol":"m3u8_native","ext":"m4a","acodec":"mp4a.40.2","vcodec":"none","abr":160}]})";
+  auto hlsAudio = selectAudioMedia(
+      aac, [](const QString &, bool hls) { return hls; },
+      MediaProvider::SoundCloud);
+  check(hlsAudio.error.isEmpty() && hlsAudio.hlsDirect,
+        "SoundCloud dedicated AAC HLS");
+  QByteArray scManifest = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:10,"
+                          "\npart.m4s\n#EXTINF:7,\npart2.m4s\n#EXT-X-ENDLIST\n";
+  auto normalized =
+      normalizeFinitePlaylist(scManifest, scHls, MediaProvider::SoundCloud);
+  check(!normalized.isEmpty(), "SoundCloud fMP4 manifest");
+  auto scSliced = sliceFinitePlaylist(normalized, 11000, false);
+  check(scSliced.startMs == 10000 && scSliced.durationMs == 17000,
+        "SoundCloud fragment indexed seek");
+  auto encrypted = scManifest;
+  encrypted.replace("#EXTINF:10,",
+                    "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"key\"\n#EXTINF:10,");
+  check(normalizeFinitePlaylist(encrypted, scHls, MediaProvider::SoundCloud)
+            .isEmpty(),
+        "encrypted HLS rejected");
+  auto foreign = scManifest;
+  foreign.replace("part.m4s", "https://evil.test/part.m4s");
+  check(normalizeFinitePlaylist(foreign, scHls, MediaProvider::SoundCloud)
+            .isEmpty(),
+        "foreign segment rejected");
   QByteArray good =
       R"({"requested_formats":[{"url":"https://manifest.googlevideo.com/v","protocol":"m3u8_native","vcodec":"avc1.64002A","acodec":"none","width":1920,"height":1080,"tbr":5000},{"url":"https://manifest.googlevideo.com/a","protocol":"m3u8_native","acodec":"mp4a.40.2","vcodec":"none"}],"title":"Test","is_live":false})";
   auto r = parseMedia(good);

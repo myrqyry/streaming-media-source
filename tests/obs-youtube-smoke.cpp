@@ -424,7 +424,8 @@ int main(int argc, char **argv) {
             queueInfo, continued, stopped, kickPass);
   }
   bool audioPass = false;
-  if (audioMode && playing && pause && seek && resume && widgetReady) {
+  if (audioMode && !importMode && playing && pause && seek && resume &&
+      widgetReady) {
     auto nextUrl = qEnvironmentVariable("SMOKE_AUDIO_NEXT",
                                         "https://youtu.be/aqz-KE-bpKQ");
     entry->setText(nextUrl);
@@ -495,14 +496,20 @@ int main(int argc, char **argv) {
       return label && label->text().startsWith("Imported") &&
              queued(s).size() == importedCount;
     });
+    const int expectedSkipped =
+        qEnvironmentVariableIntValue("SMOKE_PLAYLIST_SKIPPED");
+    const bool skippedCorrect =
+        expectedSkipped == 0 ||
+        (label && label->text().contains(
+                      QString("%1 unavailable skipped").arg(expectedSkipped)));
     auto importedQueue = queued(s);
     bool uninterrupted =
         imported && currentUrl(s) == start && importedQueue.first() == old &&
         obs_source_media_get_time(s) > position &&
         obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING;
-    bool metadata = until(5, [&] {
+    bool metadata = until(audioMode ? 25 : 5, [&] {
       return rows->count() == importedCount &&
-             rows->item(1)->text() != videoId(importedQueue.value(1)) &&
+             rows->item(1)->text() != mediaLabel(importedQueue.value(1)) &&
              total && !total->text().isEmpty();
     });
     fprintf(stderr,
@@ -537,7 +544,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "IMPORT_PLAY selected=%d autoplay=%d playback=%d\n",
             started, autoAdvance, newPlayback);
     importPass = seeded && cancelled && imported && uninterrupted && metadata &&
-                 started && autoAdvance && newPlayback;
+                 skippedCorrect && started && autoAdvance && newPlayback;
   }
   if (recoveryMode && playing && pause && seek && resume && widgetReady) {
     // Simulate an unexpected decoder stop through the real libobs child
@@ -732,7 +739,7 @@ int main(int argc, char **argv) {
   obs_shutdown();
   return dimensionQueries > 100 && released && playing && widgetReady &&
                  generatedPass &&
-                 (audioMode ? audioPass
+                 (audioMode ? (importMode ? importPass : audioPass)
                   : !kickMode.isEmpty()
                       ? kickPass
                       : (vodMode

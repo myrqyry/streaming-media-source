@@ -334,18 +334,36 @@ struct Source {
       return m;
     }
     if (audioOnly) {
-      return selectAudioMedia(
+      QHash<QString, TwitchVodSlice> slices;
+      auto selected = selectAudioMedia(
           output,
-          [&](const QString &url, bool) {
+          [&](const QString &url, bool hls) {
             if (closing || epoch != r.id ||
                 std::chrono::steady_clock::now() > deadline)
               return false;
-            return !probeMediaHttps(
-                        url, false, deadline,
-                        [&] { return closing || epoch != r.id; }, provider)
-                        .isEmpty();
+            QString effective;
+            auto body = probeMediaHttps(
+                url, hls, deadline, [&] { return closing || epoch != r.id; },
+                provider, &effective);
+            if (!hls)
+              return !body.isEmpty();
+            auto normalized =
+                normalizeFinitePlaylist(body, effective, provider);
+            auto slice = sliceFinitePlaylist(normalized, r.resumeMs, false);
+            if (slice.manifest.isEmpty())
+              return false;
+            slices.insert(url, slice);
+            return true;
           },
           provider);
+      if (selected.error.isEmpty() && selected.hlsDirect) {
+        auto slice = slices.value(selected.direct);
+        selected.manifest = QString::fromUtf8(slice.manifest);
+        selected.segmentVod = true;
+        selected.segmentStartMs = slice.startMs;
+        selected.segmentDurationMs = slice.durationMs;
+      }
+      return selected;
     }
     QHash<QString, QByteArray> snapshots;
     bool finiteHls = providerExtractor(twitch) == "twitch:vod" ||
@@ -520,7 +538,7 @@ struct Source {
   static void importProc(void *data, calldata_t *call) {
     auto s = static_cast<Source *>(data);
     auto payload = QString::fromUtf8(calldata_string(call, "urls"));
-    if (payload.size() > 16384)
+    if (payload.size() > 65536)
       return;
     auto list = QJsonDocument::fromJson(payload.toUtf8());
     if (!list.isArray() || list.array().isEmpty() || list.array().size() > 101)
@@ -800,7 +818,8 @@ struct Source {
           if (entry.isString() && urls.size() < 101 &&
               validSourceMediaUrl(entry.toString(), audioOnly))
             urls.append(entry.toString());
-        auto imported = applyPlaylistImport(q, urls, c.op == "import_play");
+        auto imported =
+            applyPlaylistImport(q, urls, c.op == "import_play", audioOnly);
         if (!imported.playUrl.isEmpty()) {
           url = imported.playUrl;
           load = true;
@@ -963,13 +982,17 @@ struct Source {
     obs_data_set_string(settings, "input", qPrintable(input));
     auto twitch = mediaProvider(r->req.url) != MediaProvider::YouTube;
     obs_data_set_string(settings, "input_format",
-                        audioOnly                       ? ""
+                        audioOnly ? (r->media.hlsDirect ? "hls" : "")
                         : twitch && !r->media.hlsDirect ? "mov"
                         : r->media.manifest.isEmpty() && !r->media.hlsDirect
                             ? ""
                             : "hls");
     obs_data_set_string(settings, "ffmpeg_options",
-                        audioOnly ? "protocol_whitelist=https,tcp,tls"
+                        audioOnly
+                            ? (r->media.manifest.isEmpty()
+                                   ? "protocol_whitelist=https,tcp,tls"
+                                   : "protocol_whitelist=file,https,tcp,tls "
+                                     "allowed_extensions=mp4,m4s,m3u8")
                         : mediaProvider(r->req.url) != MediaProvider::YouTube
                             ? (r->media.manifest.isEmpty()
                                    ? "protocol_whitelist=https,tcp,tls,crypto"
@@ -1006,7 +1029,8 @@ struct Source {
     segmentVod = r->media.segmentVod;
     segmentStart = r->media.segmentStartMs;
     segmentDuration = r->media.segmentDurationMs;
-    finiteHlsClock = providerExtractor(r->req.url) == "twitch:vod" ||
+    finiteHlsClock = (audioOnly && r->media.segmentVod) ||
+                     providerExtractor(r->req.url) == "twitch:vod" ||
                      providerExtractor(r->req.url) == "kick:vod" ||
                      providerExtractor(r->req.url) == "kick:clip";
     sessionLive = r->media.live;

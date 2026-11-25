@@ -60,4 +60,4 @@ No release binaries should be published until the remaining gates are met.
   copies. Keep binaries built against OBS 33 out of OBS 32 installations.
   The SDK pins and layout verification alone do not establish compatibility.
 
-- Streaming Audio: local OBS 32.2 mixer/transport/artwork/cross-provider EOF smokes passed; qualify audio recovery, YouTube playlist import and remote requests in audio mode, OBS 33 and native Windows/macOS playback before declaring support.
+- Streaming Audio: local OBS 32.2 mixer/transport/artwork/cross-provider EOF smokes passed; qualify audio recovery, SoundCloud collection playback/metadata, HLS artwork and remote requests in audio mode, OBS 33 and native Windows/macOS playback before declaring support.

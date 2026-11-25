@@ -627,3 +627,39 @@ All three released source; scene weak ref not expired at measurement (existing
 harness boundary). No fresh video network regression, audio playlist/remote
 request smoke or Windows/macOS/OBS33 audio playback qualification. No install,
 restart, push or release authorized for this new audio branch.
+
+## Audio collection imports and unencrypted SoundCloud HLS
+Public SoundCloud sets and Bandcamp albums accepted only by audio source.
+Exact collection extractors, bounded flat playlist JSON, provider-scoped
+entries, same-host Bandcamp tracks, secret-token rejection and existing
+100-entry queue capacity; Play prepends remaining entries, Queue appends.
+SoundCloud API-only track URLs are skipped; flat metadata cannot guarantee
+availability or DRM status. Playback failure remains explicit, not auto-skip.
+SoundCloud finite AAC fMP4 HLS on observed
+playback.media-streaming.soundcloud.cloud uses validated snapshot and
+indexed seeking, no encryption keys, no foreign segment hosts.
+RED/green resolver and collection tests, nine CTest tests passed.
+Real OBS 32.2 audio import logs:
+- build/audio-import-bandcamp.log: 11 tracks, cancel/append/uninterrupted
+  playback/metadata/play first/autoplay all pass.
+- build/audio-import-youtube.log: owner's four-track DOOM playlist, same
+  assertions pass.
+- build/audio-import-soundcloud-final.log: five of six entries queued,
+  one unsupported URL skipped, first track DRM-protected, metadata and
+  playback assertions fail.
+- build/audio-sc-collection.log: five of eight entries queued; three
+  unsupported URLs skipped; smoke expected eight so full test fails.
+- build/audio-sc-hls.log: zero frames, real mixer audio, pause/seek/resume,
+  indexed near-end seek, natural EOF at 207568/207619 ms and advance to
+  Bandcamp with mixer audio passed. Current artwork absent; full smoke
+  fails that assertion. No claim of complete SoundCloud qualification.
+Owner explicitly requested installation then push. Preserve previous
+installed module, runtime pair and active OBS process; no restart or merge.
+Feature branch CI enabled for hosted qualification; no release.
+
+Installed updated audio-capable module atomically into existing OBS 32
+user plugin directory, preserving the previous binary in
+build/installed-backups and retaining the existing runtime and data.
+Installed bytes matched the freshly checked build. OBS was not restarted.
+Final deterministic verification: 9/9 CTest, 7/7 native verifier tests and
+README links passed. New branch publication authorized by owner.

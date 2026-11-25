@@ -195,7 +195,8 @@ bool validMediaUrl(const QString &s, MediaProvider provider) {
   if (provider == MediaProvider::YouTube)
     return within("googlevideo.com");
   if (provider == MediaProvider::SoundCloud)
-    return h == "cf-media.sndcdn.com";
+    return h == "cf-media.sndcdn.com" ||
+           h == "playback.media-streaming.soundcloud.cloud";
   if (provider == MediaProvider::Bandcamp)
     return h == "t4.bcbits.com";
   if (provider == MediaProvider::Twitch) {
@@ -266,7 +267,9 @@ QByteArray normalizeFinitePlaylist(const QByteArray &body, const QString &base,
     if (!validMediaUrl(absolute, provider))
       return {};
     auto path = u.path().toLower();
-    if (!(path.endsWith(".mp4") || (!init && path.endsWith(".ts"))))
+    if (!(path.endsWith(".mp4") || (!init && path.endsWith(".ts")) ||
+          (provider == MediaProvider::SoundCloud && !init &&
+           path.endsWith(".m4s"))))
       return {};
     return absolute.toUtf8();
   };
@@ -378,7 +381,8 @@ TwitchVodSlice sliceFinitePlaylist(const QByteArray &normalized,
       ended = true;
     else if (!line.startsWith('#')) {
       auto path = QUrl(QString::fromUtf8(line)).path().toLower();
-      bool mp4 = path.endsWith(".mp4") && !map.isEmpty();
+      bool mp4 =
+          (path.endsWith(".mp4") || path.endsWith(".m4s")) && !map.isEmpty();
       bool ts = allowTs && path.endsWith(".ts") && map.isEmpty();
       if (ended || info.isEmpty() || (!mp4 && !ts) ||
           total + ms > 7LL * 24 * 3600 * 1000)
@@ -668,18 +672,24 @@ Media selectAudioMedia(const QByteArray &bytes,
     auto protocol = f.value("protocol").toString();
     auto ext = f.value("ext").toString();
     auto codec = f.value("acodec").toString();
+    bool scHls = provider == MediaProvider::SoundCloud &&
+                 protocol == "m3u8_native" && ext == "m4a" &&
+                 codec.startsWith("mp4a.") &&
+                 QUrl(f.value("url").toString()).host() ==
+                     "playback.media-streaming.soundcloud.cloud";
     if (f.value("has_drm").toBool() || f.value("vcodec").toString() != "none" ||
         codec.isEmpty() || codec == "none" ||
         !validMediaUrl(f.value("url").toString(), provider) ||
         !(protocol == "https" ||
-          (provider == MediaProvider::SoundCloud && protocol == "http")))
+          (provider == MediaProvider::SoundCloud && protocol == "http") ||
+          scHls))
       continue;
     if (provider == MediaProvider::Bandcamp &&
         f.value("format_id").toString() != "mp3-128")
       continue;
     if (provider == MediaProvider::YouTube && !(ext == "m4a" || ext == "webm"))
       continue;
-    if (audioOnlyProvider(provider) && ext != "mp3")
+    if (audioOnlyProvider(provider) && ext != "mp3" && !scHls)
       continue;
     if (f.value("audio_channels").toInt(2) > 2)
       continue;
@@ -694,8 +704,10 @@ Media selectAudioMedia(const QByteArray &bytes,
                    });
   for (size_t i = 0; i < formats.size() && i < 6; ++i) {
     auto url = formats[i].value("url").toString();
-    if (!probe(url, false))
+    bool manifest = hls(formats[i]);
+    if (!probe(url, manifest))
       continue;
+    result.hlsDirect = manifest;
     result.direct = url;
     result.info = normalizedMediaInfo(root, provider);
     result.title = result.info.value("title").toString();
