@@ -459,8 +459,10 @@ Real isolated Linux OBS, fresh HOME/empty PATH, pinned runtime:
   nonblack31/source audio127/mixed127, pause/seek/resume 1, time121190,
   natural EOF position33075024/duration33077044, VOD_INFO all 1,
   auto advanced to fMP4 with audio; 23176 queries and source teardown.
-- build/twitch-vod-final-youtube.log final regression started after TS.
-  Check completion before claiming final YouTube network verification.
+- build/twitch-vod-final-youtube.log exit 0: YouTube 1920x1080,
+  nonblack26/source audio40/mixed41, pause/seek/resume and thumbnail 1,
+  playlist cancel/import99/uninterrupted/metadata/first autoplay 1,
+  23215 dimension queries and source teardown.
 README/CHANGELOG/AGENTS updated; no production install or restart, no push,
 cross-platform PR untouched. Remaining audio-only, offline waiting,
 live refresh, cross-platform playback and broader VOD qualification.
