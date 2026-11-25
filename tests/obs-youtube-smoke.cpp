@@ -425,8 +425,12 @@ int main(int argc, char **argv) {
     auto cancel = dock->findChild<QToolButton *>("media-import-cancel");
     auto total = dock->findChild<QLabel *>("media-queue-duration");
     auto playList = dock->findChild<QPushButton *>("media-url-play");
-    const QString link =
-        "https://www.youtube.com/playlist?list=UUSMOQeBJ2RAnuFungnQOxLg";
+    const QString link = qEnvironmentVariable(
+        "SMOKE_PLAYLIST_URL",
+        "https://www.youtube.com/playlist?list=UUSMOQeBJ2RAnuFungnQOxLg");
+    const int expected = qEnvironmentVariableIntValue("SMOKE_PLAYLIST_COUNT");
+    const int importedCount = expected > 0 ? std::min(expected + 1, 100) : 100;
+    const int playCount = expected > 0 ? std::min(expected, 100) : 100;
     const QString old = "https://youtu.be/jNQXAC9IVRw";
     auto start = currentUrl(s);
     queueCommand(s, "append", qPrintable(old));
@@ -446,7 +450,7 @@ int main(int argc, char **argv) {
     add->click();
     bool imported = until(55, [&] {
       return label && label->text().startsWith("Imported") &&
-             queued(s).size() == 100;
+             queued(s).size() == importedCount;
     });
     auto importedQueue = queued(s);
     bool uninterrupted =
@@ -454,7 +458,7 @@ int main(int argc, char **argv) {
         obs_source_media_get_time(s) > position &&
         obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING;
     bool metadata = until(5, [&] {
-      return rows->count() == 100 &&
+      return rows->count() == importedCount &&
              rows->item(1)->text() != videoId(importedQueue.value(1)) &&
              total && !total->text().isEmpty();
     });
@@ -475,7 +479,8 @@ int main(int argc, char **argv) {
     bool started = imported && until(55, [&] {
                      return label && label->text().contains("first selected") &&
                             currentUrl(s) == importedQueue.value(1) &&
-                            queued(s).size() == 100 && queued(s).last() == old;
+                            queued(s).size() == playCount &&
+                            queued(s).last() == old;
                    });
     auto settings = obs_source_get_settings(s);
     bool autoAdvance = obs_data_get_bool(settings, "auto_advance");

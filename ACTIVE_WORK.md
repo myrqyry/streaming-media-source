@@ -546,3 +546,16 @@ SMOKE_GENERATED_PREVIEW=1, fresh HOME/empty PATH, pinned runtime:
   successful known VOD smoke. Windows/macOS graphics and fresh
   YouTube/Twitch network smokes not independently qualified.
 No production install, restart, merge or push.
+
+## Exact DOOM 64 playlist diagnosis and local update
+Owner reported https://www.youtube.com/playlist?list=PL405KaL3g2_esG8xHAilxHDaqd9aLM28s does not queue or play.
+Running OBS log and installed binary confirmed v0.3.2, which predates
+playlist import; current feature branch module v0.6.0. Both pinned bundled
+and system yt-dlp extracted all four public playlist entries successfully.
+Parameterized existing smoke harness with SMOKE_PLAYLIST_URL and
+SMOKE_PLAYLIST_COUNT, preserving default capacity regression.
+Real isolated Linux OBS build/doom-playlist-smoke.log exit 0:
+1080p audio/video and transport, cancellation, all four videos queued
+alongside existing item, no playback interruption, metadata, first video
+selected and actually played, autoplay enabled, 27803 dimension queries,
+source released. CTest 9/9. No importer code change necessary.
