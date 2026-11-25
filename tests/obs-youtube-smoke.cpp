@@ -155,8 +155,10 @@ int main(int argc, char **argv) {
   auto d = obs_data_create();
   obs_data_set_string(d, "url", argv[2]);
   obs_data_set_bool(d, "hw", false);
-  auto s =
-      obs_source_create("streaming_media_youtube", "YouTube smoke", d, nullptr);
+  const bool audioMode = qEnvironmentVariableIntValue("SMOKE_AUDIO") != 0;
+  auto s = obs_source_create(audioMode ? "streaming_media_audio"
+                                       : "streaming_media_youtube",
+                             "Media smoke", d, nullptr);
   obs_data_release(d);
   if (!s)
     return 2;
@@ -181,8 +183,10 @@ int main(int argc, char **argv) {
     }
   });
   bool playing = until(45, [&] {
-    return frames > 15 && audio > 15 && mixed > 15 &&
-           obs_source_get_width(s) > 0 && obs_source_media_get_time(s) > 1000;
+    return audio > 15 && mixed > 15 &&
+           (audioMode ? obs_source_get_width(s) == 0 && frames == 0
+                      : frames > 15 && obs_source_get_width(s) > 0) &&
+           obs_source_media_get_time(s) > 1000;
   });
   fprintf(stderr,
           "PLAY width=%u height=%u nonblack=%d source_audio=%d mixed_audio=%d "
@@ -211,7 +215,10 @@ int main(int argc, char **argv) {
     auto after = obs_source_media_get_time(s);
     pause = obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED &&
             std::abs(after - before) < 300;
-    auto target = vodMode ? 120000 : clipMode ? 10000 : 45000;
+    auto target = audioMode  ? 10000
+                  : vodMode  ? 120000
+                  : clipMode ? 10000
+                             : 45000;
     obs_source_media_set_time(s, target);
     obs_source_media_play_pause(s, false);
     seek = until(18, [&] {
@@ -416,6 +423,42 @@ int main(int argc, char **argv) {
             qPrintable(kickMode), info, liveCount, thumbnailReady, appended,
             queueInfo, continued, stopped, kickPass);
   }
+  bool audioPass = false;
+  if (audioMode && playing && pause && seek && resume && widgetReady) {
+    auto nextUrl = qEnvironmentVariable("SMOKE_AUDIO_NEXT",
+                                        "https://youtu.be/aqz-KE-bpKQ");
+    entry->setText(nextUrl);
+    add->click();
+    bool appended = until(4, [&] { return queued(s) == QStringList{nextUrl}; });
+    bool metadata = until(24, [&] {
+      return rows->count() == 1 && !rows->item(0)->icon().isNull();
+    });
+    auto end = obs_source_media_get_duration(s);
+    queueCommand(s, "autoplay", "", -1, 1);
+    bool advanced = false, nextAudio = false;
+    if (appended && end > 12000) {
+      obs_source_media_set_time(s, end - 5000);
+      advanced = until(
+          40, [&] { return currentUrl(s) == nextUrl && queued(s).isEmpty(); });
+      auto before = mixed.load();
+      nextAudio =
+          advanced && until(35, [&] {
+            return mixed > before + 15 &&
+                   obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING;
+          });
+    }
+    obs_source_media_stop(s);
+    bool stopped = until(5, [&] {
+      return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+    });
+    audioPass = appended && metadata && thumbnailReady && advanced &&
+                nextAudio && stopped && frames == 0;
+    fprintf(stderr,
+            "AUDIO_ONLY queue=%d metadata=%d artwork=%d advanced=%d "
+            "next_audio=%d stopped=%d frames=%d pass=%d\n",
+            appended, metadata, thumbnailReady, advanced, nextAudio, stopped,
+            frames.load(), audioPass);
+  }
   bool importPass = false;
   bool recoveryPass = false;
   bool queueEdit = false, nextPlayback = false, stopped = false,
@@ -552,8 +595,8 @@ int main(int argc, char **argv) {
             reconnect, resumed, cancelled, preserved, (long long)oldPos);
     recoveryPass = reconnect && resumed && cancelled && preserved;
   }
-  if (!liveMode && !clipMode && !vodMode && !importMode && !recoveryMode &&
-      playing && pause && seek && resume && widgetReady) {
+  if (!audioMode && !liveMode && !clipMode && !vodMode && !importMode &&
+      !recoveryMode && playing && pause && seek && resume && widgetReady) {
     const char *other = "https://youtu.be/aqz-KE-bpKQ";
     const char *third = "https://youtu.be/jNQXAC9IVRw";
     entry->setText(third);
@@ -689,7 +732,8 @@ int main(int argc, char **argv) {
   obs_shutdown();
   return dimensionQueries > 100 && released && playing && widgetReady &&
                  generatedPass &&
-                 (!kickMode.isEmpty()
+                 (audioMode ? audioPass
+                  : !kickMode.isEmpty()
                       ? kickPass
                       : (vodMode
                              ? vodPass

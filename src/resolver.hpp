@@ -2,7 +2,14 @@
 #include <QByteArray>
 #include <QJsonObject>
 #include <QString>
-enum class MediaProvider { Unknown, YouTube, Twitch, Kick };
+enum class MediaProvider {
+  Unknown,
+  YouTube,
+  Twitch,
+  Kick,
+  SoundCloud,
+  Bandcamp
+};
 MediaProvider mediaProvider(const QString &url);
 QString canonicalKickUrl(const QString &url);
 QString canonicalProviderUrl(const QString &url);
@@ -44,3 +51,8 @@ Media selectMedia(const QByteArray &json, int maxHeight,
                   const std::function<bool(const QString &, bool)> &probe,
                   MediaProvider provider = MediaProvider::YouTube);
 bool validVodPlaylist(const QByteArray &body);
+
+Media selectAudioMedia(const QByteArray &json,
+                       const std::function<bool(const QString &, bool)> &probe,
+                       MediaProvider provider);
+bool audioOnlyProvider(MediaProvider provider);

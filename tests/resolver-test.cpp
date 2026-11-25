@@ -17,6 +17,54 @@ int main(int argc, char **argv) {
         "host confusion");
   check(!validYoutube("https://youtube.com@evil.test/watch?v=x"), "user info");
   check(!validYoutube("file:///tmp/foo"), "non-network input");
+  check(canonicalProviderUrl(
+            "https://soundcloud.com/artist/song?utm_source=test") ==
+            "https://soundcloud.com/artist/song",
+        "canonical SoundCloud track");
+  check(canonicalProviderUrl("https://artist.bandcamp.com/track/song") ==
+            "https://artist.bandcamp.com/track/song",
+        "canonical Bandcamp track");
+  check(canonicalProviderUrl("https://soundcloud.com/artist/sets/album")
+                .isEmpty() &&
+            canonicalProviderUrl("https://artist.bandcamp.com/album/song")
+                .isEmpty() &&
+            canonicalProviderUrl(
+                "https://artist.bandcamp.com.evil.test/track/song")
+                .isEmpty(),
+        "reject collections and foreign hosts in track route");
+  check(providerExtractorKey("https://soundcloud.com/artist/song") ==
+                "Soundcloud" &&
+            providerExtractorKey("https://artist.bandcamp.com/track/song") ==
+                "Bandcamp",
+        "exact audio extractor identities");
+  QByteArray music =
+      R"({"extractor_key":"Soundcloud","title":"Track","formats":[{"url":"https://cf-media.sndcdn.com/a","protocol":"http","ext":"mp3","acodec":"mp3","vcodec":"none","abr":128},{"url":"https://evil.test/a","protocol":"https","ext":"mp3","acodec":"mp3","vcodec":"none","abr":320}]})";
+  auto audio = selectAudioMedia(
+      music, [](const QString &, bool) { return true; },
+      MediaProvider::SoundCloud);
+  check(audio.error.isEmpty() &&
+            audio.direct == "https://cf-media.sndcdn.com/a" &&
+            audio.manifest.isEmpty(),
+        "select dedicated progressive HTTPS audio");
+  check(!selectAudioMedia(
+             music, [](const QString &, bool) { return true; },
+             MediaProvider::Bandcamp)
+             .error.isEmpty(),
+        "provider isolation");
+  QByteArray albumTrack =
+      R"({"extractor_key":"Bandcamp","formats":[{"url":"https://t4.bcbits.com/stream","format_id":"mp3-128","protocol":"https","ext":"mp3","acodec":"mp3","vcodec":"none","abr":128},{"url":"https://popplers5.bandcamp.com/download","format_id":"flac","protocol":"https","ext":"flac","acodec":"flac","vcodec":"none"}]})";
+  check(selectAudioMedia(
+            albumTrack, [](const QString &, bool) { return true; },
+            MediaProvider::Bandcamp)
+                .direct == "https://t4.bcbits.com/stream",
+        "Bandcamp public stream only");
+  QByteArray ytAudio =
+      R"({"extractor_key":"Youtube","formats":[{"url":"https://r.googlevideo.com/combined","protocol":"https","ext":"mp4","acodec":"mp4a.40.2","vcodec":"avc1","abr":320},{"url":"https://r.googlevideo.com/drm","protocol":"https","ext":"m4a","acodec":"mp4a.40.2","vcodec":"none","has_drm":true,"abr":320},{"url":"https://r.googlevideo.com/audio","protocol":"https","ext":"m4a","acodec":"mp4a.40.2","vcodec":"none","abr":128}]})";
+  check(selectAudioMedia(
+            ytAudio, [](const QString &, bool) { return true; },
+            MediaProvider::YouTube)
+                .direct == "https://r.googlevideo.com/audio",
+        "audio only excludes video and DRM");
   QByteArray good =
       R"({"requested_formats":[{"url":"https://manifest.googlevideo.com/v","protocol":"m3u8_native","vcodec":"avc1.64002A","acodec":"none","width":1920,"height":1080,"tbr":5000},{"url":"https://manifest.googlevideo.com/a","protocol":"m3u8_native","acodec":"mp4a.40.2","vcodec":"none"}],"title":"Test","is_live":false})";
   auto r = parseMedia(good);

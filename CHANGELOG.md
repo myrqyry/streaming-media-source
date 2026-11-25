@@ -3,6 +3,14 @@
 This log describes development checkpoints. No public release has been
 published.
 
+## Unreleased — Streaming Audio
+
+- Dedicated audio-only OBS source with shared transport, mixer, metadata and
+  queue; public YouTube, SoundCloud and Bandcamp tracks.
+- Verified real playback, seek, pause/resume and cross-provider automatic
+  advancement on Linux OBS 32.2, with zero video frames.
+- Spotify, collection imports outside YouTube and live audio remain unsupported.
+
 ## Unreleased — Twitch and Kick providers
 
 - Version-pinned OBS 32.2.0/33.0.3 SDK matrix across Linux, Windows and
@@ -16,7 +24,7 @@ published.
   channel/clip identities, bounded HTTPS preflight and live HLS checks.
 - Source name becomes Streaming Media; the persisted source ID is unchanged.
 - Verified isolated Linux OBS playback for a public live channel and clip.
-  Offline polling and audio-only mode remain future work.
+  Offline polling and Twitch/Kick audio-only mode remain future work.
 - Reuse normalized extractor metadata for the current item and enrich
   visible Twitch queue items with independent bounded lookups, including
   thumbnails, channel/category, duration, optional counts and details.

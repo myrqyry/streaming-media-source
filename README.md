@@ -1,6 +1,6 @@
 # Streaming Media Source for OBS
 
-A standalone native OBS source for browser-free internet media playback. Paste a
+Native OBS video and audio sources for browser-free internet media playback. Paste a
 public YouTube video, Twitch or Kick live channel, clip or VOD URL into
 **Sources → Streaming Media**, or use the dock to import a public YouTube playlist.
 The original URL, not an expiring media URL, is stored in scene settings.
@@ -16,6 +16,34 @@ desktop capture, listening port, or full-video download.
 > **Development preview (0.6.0).** Linux x86_64 and native OBS 32.2 are the current
 > locally exercised target. Public release packages are not available.
 > [Build checks](https://github.com/myrqyry/streaming-media-source/actions) · [Release readiness](RELEASE_CHECKLIST.md) · [Changelog](CHANGELOG.md)
+
+## Streaming Audio
+
+Add **Sources → Streaming Audio** for audio-only playback, and select that
+source in the existing Streaming Media dock. It shares the native OBS mixer,
+queue, transport controls, artwork, metadata and automatic advancement, but
+does not request video renditions or expose video resolution controls.
+
+| Provider | Supported input |
+| --- | --- |
+| YouTube | Public video URLs with dedicated HTTPS audio; YouTube playlist import |
+| SoundCloud | Public individual track URLs with supported progressive MP3 audio |
+| Bandcamp | Public individual track URLs with a standard MP3 streaming rendition |
+| Spotify | Not supported: no direct full-track audio stream is exposed by its official playback API |
+
+Audio extraction validates exact provider identity, HTTPS CDN hosts, dedicated
+audio formats and reachable renditions. It does not use cookies, download
+purchased albums, circumvent access restrictions or fall back to video decoding.
+SoundCloud sets, Bandcamp albums, live audio/HLS and additional CDN coverage
+are future qualification work. Only stream music for which you have the
+necessary rights.
+
+Real Linux OBS 32.2 smoke tests passed for YouTube, SoundCloud and Bandcamp,
+including mixed-provider automatic advancement, artwork, pause, seek, resume,
+mixer audio and zero rendered video frames. Cross-platform playback, OBS 33,
+audio recovery after interruption and live audio are not yet qualified.
+YouTube playlist import and remote requests reuse existing code but were not
+separately smoke-tested with the audio source.
 
 ## Requirements
 

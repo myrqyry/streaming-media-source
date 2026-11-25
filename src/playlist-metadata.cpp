@@ -27,6 +27,10 @@ bool validThumbnailUrl(const QString &url, MediaProvider provider) {
       url.contains('\r'))
     return false;
   auto h = u.host().toLower();
+  if (provider == MediaProvider::SoundCloud)
+    return h == "i1.sndcdn.com";
+  if (provider == MediaProvider::Bandcamp)
+    return h == "f4.bcbits.com";
   if (provider == MediaProvider::Kick)
     return h == "stream.kick.com" || h == "clips.kick.com";
   return provider == MediaProvider::Twitch
@@ -45,7 +49,12 @@ QJsonObject normalizedMediaInfo(const QJsonObject &root,
   string("title", root.value("title").toString());
   auto channel = root.value("channel").toString();
   auto uploader = root.value("uploader").toString();
-  string("author", channel.isEmpty() ? uploader : channel);
+  auto artist = root.value("artist").toString();
+  string("author", !artist.isEmpty()   ? artist
+                   : channel.isEmpty() ? uploader
+                                       : channel);
+  string("album", root.value("album").toString());
+  string("track", root.value("track").toString());
   if (!channel.isEmpty() && uploader != channel)
     string("uploader", uploader);
   string("description", root.value("description").toString(), 1200);

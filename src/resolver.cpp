@@ -107,11 +107,51 @@ QString canonicalKickUrl(const QString &s) {
       "community",  "subscriptions", "api",    "embed"};
   return reserved.contains(id) ? QString{} : "https://kick.com/" + id;
 }
+static QString canonicalAudioTrack(const QString &s) {
+  QUrl u(s, QUrl::StrictMode);
+  if (s.size() > 2048 || !httpsUrl(s, u))
+    return {};
+  auto host = u.host().toLower(), path = u.path(QUrl::FullyEncoded);
+  static const QRegularExpression sc(
+      "^/([A-Za-z0-9_-]{1,100})/([A-Za-z0-9_-]{1,200})/?$");
+  static const QRegularExpression bc(
+      "^([a-z0-9][a-z0-9-]{0,62})\\.bandcamp\\.com$");
+  static const QRegularExpression track("^/track/([A-Za-z0-9_-]{1,200})/?$");
+  if (host == "soundcloud.com" || host == "www.soundcloud.com" ||
+      host == "m.soundcloud.com") {
+    auto m = sc.match(path);
+    if (!m.hasMatch() ||
+        QStringList{"discover", "search", "you", "upload", "settings", "pages",
+                    "charts"}
+            .contains(m.captured(1).toLower()) ||
+        QStringList{"sets", "tracks", "albums", "reposts", "likes", "followers",
+                    "following"}
+            .contains(m.captured(2).toLower()))
+      return {};
+    return "https://soundcloud.com/" + m.captured(1) + "/" + m.captured(2);
+  }
+  if (bc.match(host).hasMatch() && host != "www.bandcamp.com") {
+    auto m = track.match(path);
+    if (m.hasMatch())
+      return "https://" + host + "/track/" + m.captured(1);
+  }
+  return {};
+}
+bool audioOnlyProvider(MediaProvider p) {
+  return p == MediaProvider::SoundCloud || p == MediaProvider::Bandcamp;
+}
 QString canonicalProviderUrl(const QString &url) {
   auto twitch = canonicalTwitchUrl(url);
-  return twitch.isEmpty() ? canonicalKickUrl(url) : twitch;
+  if (!twitch.isEmpty())
+    return twitch;
+  auto kick = canonicalKickUrl(url);
+  return kick.isEmpty() ? canonicalAudioTrack(url) : kick;
 }
 QString providerExtractor(const QString &url) {
+  auto audio = canonicalAudioTrack(url);
+  if (!audio.isEmpty())
+    return audio.startsWith("https://soundcloud.com/") ? "soundcloud"
+                                                       : "bandcamp";
   auto kick = canonicalKickUrl(url);
   if (kick.isEmpty())
     return twitchExtractor(url);
@@ -121,6 +161,10 @@ QString providerExtractor(const QString &url) {
 }
 QString providerExtractorKey(const QString &url) {
   auto e = providerExtractor(url);
+  if (e == "soundcloud")
+    return "Soundcloud";
+  if (e == "bandcamp")
+    return "Bandcamp";
   return e == "kick:live"   ? "Kick"
          : e == "kick:vod"  ? "KickVOD"
          : e == "kick:clip" ? "KickClip"
@@ -133,6 +177,11 @@ MediaProvider mediaProvider(const QString &s) {
     return MediaProvider::Twitch;
   if (!canonicalKickUrl(s).isEmpty())
     return MediaProvider::Kick;
+  auto audio = canonicalAudioTrack(s);
+  if (!audio.isEmpty())
+    return audio.startsWith("https://soundcloud.com/")
+               ? MediaProvider::SoundCloud
+               : MediaProvider::Bandcamp;
   return MediaProvider::Unknown;
 }
 bool validMediaUrl(const QString &s, MediaProvider provider) {
@@ -145,6 +194,10 @@ bool validMediaUrl(const QString &s, MediaProvider provider) {
   };
   if (provider == MediaProvider::YouTube)
     return within("googlevideo.com");
+  if (provider == MediaProvider::SoundCloud)
+    return h == "cf-media.sndcdn.com";
+  if (provider == MediaProvider::Bandcamp)
+    return h == "t4.bcbits.com";
   if (provider == MediaProvider::Twitch) {
     // Twitch HLS edges and clip media, not arbitrary CloudFront or twitch.tv
     // hosts.
@@ -594,4 +647,60 @@ bool validVodPlaylist(const QByteArray &body) {
     }
   }
   return end && segment;
+}
+
+Media selectAudioMedia(const QByteArray &bytes,
+                       const std::function<bool(const QString &, bool)> &probe,
+                       MediaProvider provider) {
+  Media result;
+  result.error = "No reachable dedicated audio stream";
+  auto root = QJsonDocument::fromJson(bytes).object();
+  const auto key = root.value("extractor_key").toString();
+  if (root.value("is_live").toBool() || root.value("has_drm").toBool() ||
+      !((provider == MediaProvider::YouTube && key == "Youtube") ||
+        (provider == MediaProvider::SoundCloud && key == "Soundcloud") ||
+        (provider == MediaProvider::Bandcamp && key == "Bandcamp")))
+    return result;
+  std::vector<QJsonObject> formats;
+  auto items = root.value("formats").toArray();
+  for (int i = 0; i < items.size() && i < 1000; ++i) {
+    auto f = items[i].toObject();
+    auto protocol = f.value("protocol").toString();
+    auto ext = f.value("ext").toString();
+    auto codec = f.value("acodec").toString();
+    if (f.value("has_drm").toBool() || f.value("vcodec").toString() != "none" ||
+        codec.isEmpty() || codec == "none" ||
+        !validMediaUrl(f.value("url").toString(), provider) ||
+        !(protocol == "https" ||
+          (provider == MediaProvider::SoundCloud && protocol == "http")))
+      continue;
+    if (provider == MediaProvider::Bandcamp &&
+        f.value("format_id").toString() != "mp3-128")
+      continue;
+    if (provider == MediaProvider::YouTube && !(ext == "m4a" || ext == "webm"))
+      continue;
+    if (audioOnlyProvider(provider) && ext != "mp3")
+      continue;
+    if (f.value("audio_channels").toInt(2) > 2)
+      continue;
+    if (f.value("format_id").toString().contains("-drc"))
+      continue;
+    formats.push_back(f);
+  }
+  std::stable_sort(formats.begin(), formats.end(),
+                   [](const auto &a, const auto &b) {
+                     return a.value("abr").toDouble(a.value("tbr").toDouble()) >
+                            b.value("abr").toDouble(b.value("tbr").toDouble());
+                   });
+  for (size_t i = 0; i < formats.size() && i < 6; ++i) {
+    auto url = formats[i].value("url").toString();
+    if (!probe(url, false))
+      continue;
+    result.direct = url;
+    result.info = normalizedMediaInfo(root, provider);
+    result.title = result.info.value("title").toString();
+    result.error.clear();
+    return result;
+  }
+  return result;
 }
