@@ -115,3 +115,24 @@ The deployment target is macOS 13.0 to match the linked Qt framework
 minimum reported by the linker. Regression tests reproduce both
 verifier defects. Native package qualification still requires a green
 rerun; live playback remains a separate gate.
+
+### Windows headless Qt platform
+
+PR run [45514383898](https://github.com/myrqyry/streaming-media-source/actions/runs/45514383898)
+at 1f1f7c8 passed Linux and both Mac native build/test/archive jobs.
+Windows compiled successfully and passed eight of nine tests; the
+dock-theme-test timed out with no diagnostic output. Inspection of the
+central directory of the exact pinned Windows Qt dependency asset
+(windows-deps-qt6-2026-07-15-x64.zip) found qminimal.dll, qwindows.dll
+and qdirect2d.dll, but no qoffscreen.dll. The test had forced offscreen
+on every platform. Windows now uses minimal and the verifier checks its
+DLL exists before launching CTest; Linux and macOS retain offscreen.
+The test emits startup/platform/teardown diagnostics to stderr.
+The narrow-layout test assigns the dock width explicitly, verifying
+a preview no wider than 80 pixels at a 240-pixel dock width rather than
+depending on top-level window manager sizing or default fonts.
+The same assertions pass locally with both Qt backends. All nine Linux
+tests and four Python verifier tests passed. Hosted Windows qualification
+requires a successful rerun. The pinned Mac universal dependency choice
+is tested for both architectures; OBS/Qt dependencies are explicitly
+unpacked by role.

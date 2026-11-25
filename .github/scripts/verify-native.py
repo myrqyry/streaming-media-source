@@ -87,14 +87,31 @@ def dependency_dirs(obs, target):
     # OBS also builds/downloads x86 helper dependencies on Windows.
     # Only the native x64 (or universal macOS) pair belongs on the
     # plugin's CMake prefix and runtime library search paths.
-    arch = "x64" if target == "windows-x64" else "universal"
+    if target == "windows-x64":
+        arch = "x64"
+    elif target in ("macos-arm64", "macos-x86_64"):
+        # Both architectures use OBS 32.2.0's pinned universal archive.
+        arch = "universal"
+    else:
+        raise RuntimeError(f"Unsupported dependency target: {target}")
     base = obs / ".deps"
-    deps = [base / f"obs-deps-2026-07-15-{arch}",
-            base / f"obs-deps-qt6-2026-07-15-{arch}"]
+    deps = (base / f"obs-deps-2026-07-15-{arch}",
+            base / f"obs-deps-qt6-2026-07-15-{arch}")
     for path, label in zip(deps, ("OBS", "Qt")):
         if not path.is_dir():
             raise RuntimeError(f"Missing pinned {label} dependency directory: {path}")
     return deps
+
+
+def qt_test_platform(qt, target):
+    if target == "windows-x64":
+        # The pinned Windows Qt archive includes minimal/windows/direct2d,
+        # not offscreen. Fail before launching a GUI executable if absent.
+        plugin = qt / "plugins" / "platforms" / "qminimal.dll"
+        if not plugin.is_file():
+            raise RuntimeError(f"Missing headless Qt platform plugin: {plugin}")
+        return "minimal"
+    return "offscreen"
 
 
 def native_config():
@@ -174,7 +191,9 @@ def main():
         "--target", "obs-frontend-api", "--parallel", "4")
     run("cmake", "--install", obs_build, "--config", "Release",
         "--component", "Development", "--prefix", sdk)
-    deps = dependency_dirs(obs, target)
+    obs_deps, qt_deps = dependency_dirs(obs, target)
+    deps = (obs_deps, qt_deps)
+    qpa = qt_test_platform(qt_deps, target)
     header = work / "obs-websocket-api.h"
     download(f"https://raw.githubusercontent.com/obsproject/obs-websocket/{WS_REV}/lib/obs-websocket-api.h",
              header, WS_SHA)
@@ -187,9 +206,11 @@ def main():
         f"-DOBS_WEBSOCKET_INCLUDE_DIR={work.as_posix()}", "-DSTREAMING_MEDIA_RUNTIME_DIR=")
     run("cmake", "--build", build, "--config", "Release", "--parallel", "4")
     env = os.environ.copy()
-    qt = deps[1]
-    env["QT_PLUGIN_PATH"] = str(qt / "plugins")
-    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["QT_PLUGIN_PATH"] = str(qt_deps / "plugins")
+    env["QT_QPA_PLATFORM"] = qpa
+    env["QT_FORCE_STDERR_LOGGING"] = "1"
+    if target == "windows-x64":
+        env["QT_DEBUG_PLUGINS"] = "1"
     if target == "windows-x64":
         env["PATH"] = os.pathsep.join([str(sdk / "bin/64bit"), str(sdk / "bin"),
                                       *(str(p / "bin") for p in deps), env["PATH"]])
