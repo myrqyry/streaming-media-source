@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    uses: ./.github/workflows/plugin-build.yml
+    uses: myrqyry/obs-plugin-ci/.github/workflows/build.yml@db6c0a2495456274ecf91f18fc83dd64dc6d29e8
     with:
       module: obs-streaming-media
       minimum-tests: 9

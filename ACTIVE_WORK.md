@@ -753,3 +753,10 @@ in place. Only exact verified archive and SHA256SUMS uploaded, 14-day
 retention, no release. Red/green contract tests 3/3, native verifier 7/7,
 README test 1/1; actual previous verified Linux archive passed handoff.
 Hosted upload and central invocation pending. No other plugins modified.
+
+Shared CI published as https://github.com/myrqyry/obs-plugin-ci (public
+because public caller repositories cannot call private shared workflows).
+Caller now pins immutable db6c0a2495456274ecf91f18fc83dd64dc6d29e8; the
+identical temporary local workflow has been removed. Push the pilot
+branch to qualify cross-repository invocation and all eight artifacts.
+Do not migrate unrelated plugins or merge until that run is verified.
