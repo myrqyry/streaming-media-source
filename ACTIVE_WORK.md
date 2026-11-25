@@ -515,3 +515,34 @@ network smokes not rerun after Kick changes. Broader CDN/format coverage,
 uninterrupted long-duration playback, audio-only, collections, Windows/
 macOS live playback remain unqualified. No production install/restart,
 push or merge; PR #1 untouched.
+
+## Generated playback previews
+Owner approved generating our own thumbnails from already decoded video
+instead of scraping Kick gallery/RSC or trying to bypass image HTTP 403.
+Shared current-media capture uses OBS graphics texture render and staging
+readback on separate video ticks, max 320x180 preserving aspect, RGBX
+copy with validated stride/size and bounded base64 proc transfer once
+per playback epoch. Dock requests only when visible and video is
+playing/paused; request expires after 2s, blank captures retry at most
+once per second. No extra media download or decoder. Captured images
+take precedence over provider images and are reused by matching queue
+rows in existing session-only bounded cache; unplayed items still rely
+on provider metadata/images. Fallback provider fetch retained when
+playback has not supplied a frame. No continuous preview or persistent
+thumbnail files. Existing source ID and playback owner unchanged.
+Red/green tests for dimensions, row stride, color and malformed payload
+in dock-theme-test; CTest 9/9. Real isolated Linux OBS smoke
+SMOKE_GENERATED_PREVIEW=1, fresh HOME/empty PATH, pinned runtime:
+- build/generated-preview-vod.log exit 0, previously qualified Kick VOD
+  1920x1080, source/mixed audio52, pause/seek/resume all 1, captured
+  preview and cache reuse and continued audio all 1, next queue metadata,
+  stop and teardown passed, 14384 dimension queries.
+- build/generated-preview-smoke.log Nickwhite Tuesday Livestream:
+  captured=1 and queue_cache=1, but audio resume/continued=0 and H264
+  invalid NAL/concealment warnings after seeking before preview request.
+  Entire smoke exit 1; exact recording playback issue not resolved.
+  Preview capture itself worked. Do not claim full Nickwhite playback.
+  Sample image build/generated-preview-smoke.png overwritten by final
+  successful known VOD smoke. Windows/macOS graphics and fresh
+  YouTube/Twitch network smokes not independently qualified.
+No production install, restart, merge or push.

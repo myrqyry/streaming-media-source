@@ -29,6 +29,10 @@ published.
   reconciliation handles a bounded segment-padding discrepancy. Indexed
   Kick VOD seeking and actual clip/VOD natural-end advancement verified.
 
+- Generate current-media previews from the existing native decoder,
+  using bounded aspect-preserving readback and reusing captured stills
+  for matching queue entries without another media download.
+
 ## 0.6.0 — Playlist imports
 
 - Import supported public YouTube playlists through the existing dock's

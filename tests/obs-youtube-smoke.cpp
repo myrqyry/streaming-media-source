@@ -249,6 +249,33 @@ int main(int argc, char **argv) {
       widgetReady && until(8, [&] { return !thumb->pixmap().isNull(); });
   fprintf(stderr, "DOCK widgets=%d thumbnail=%d\n", widgetReady,
           thumbnailReady);
+  const bool generatedMode =
+      qEnvironmentVariableIntValue("SMOKE_GENERATED_PREVIEW") != 0;
+  bool generatedPass = !generatedMode;
+  if (generatedMode && widgetReady && playing) {
+    const auto before = mixed.load();
+    bool captured = until(8, [&] {
+      return thumb->property("generatedPreview").toBool() &&
+             !thumb->pixmap().isNull();
+    });
+    if (captured)
+      thumb->pixmap().save("build/generated-preview-smoke.png");
+    auto playingUrl = currentUrl(s);
+    entry->setText(playingUrl);
+    add->click();
+    bool cached = until(4, [&] {
+      return rows->count() == 1 && !rows->item(0)->icon().isNull();
+    });
+    bool audioContinued = until(4, [&] { return mixed > before + 10; });
+    generatedPass = captured && cached && audioContinued;
+    fprintf(stderr,
+            "GENERATED_PREVIEW captured=%d queue_cache=%d audio_continued=%d "
+            "pass=%d\n",
+            captured, cached, audioContinued, generatedPass);
+    queueCommand(s, "clear", "", -1, -1);
+    until(3, [&] { return queued(s).isEmpty(); });
+  }
+
   if (widgetReady && !liveMode && !clipMode && !vodMode)
     dock->grab().save("build/dock-widget-preview.png");
   const bool recoveryMode = qEnvironmentVariableIntValue("SMOKE_RECOVERY") != 0;
@@ -656,6 +683,7 @@ int main(int argc, char **argv) {
   pump();
   obs_shutdown();
   return dimensionQueries > 100 && released && playing && widgetReady &&
+                 generatedPass &&
                  (!kickMode.isEmpty()
                       ? kickPass
                       : (vodMode

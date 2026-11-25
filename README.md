@@ -201,6 +201,18 @@ the corresponding public URL in the isolated smoke harness. Set
 item playback for a finite item. Live and archived media availability
 can change independently of the plugin.
 
+### Generated playback previews
+
+The dock captures its own still from the existing OBS media decoder when
+video is available. A small aspect-preserving image (at most 320 × 180)
+is rendered and read back over separate video ticks, once per playback
+generation; it is not a continuous video preview. The captured image
+takes priority over provider thumbnails and is reused for matching queue
+entries in the bounded session cache. There is no extra media download,
+browser, second decoder, or persistent screenshot file. A provider image
+remains a fallback before video is available or if capture fails.
+Unplayed queue items still use provider thumbnails when available.
+
 ### Visual playlists (0.4.1)
 
 Upcoming videos show a thumbnail, title and channel name, with full

@@ -5,6 +5,7 @@
 #include "media-runtime.hpp"
 #include "media-websocket.hpp"
 #include "playlist-import.hpp"
+#include "preview-frame.hpp"
 #include "resolver.hpp"
 #include "runtime-update.hpp"
 #include <QDir>
@@ -23,6 +24,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <graphics/vec4.h>
 #include <mutex>
 #include <obs-module.h>
 #include <optional>
@@ -78,6 +80,18 @@ struct Source {
   bool waitingDecoder = false;
   std::unique_ptr<AudioHandoff> audioHandoff;
   std::atomic<uint64_t> epoch{0};
+  // Graphics resources belong to the video tick; UI only requests a
+  // generation and copies a small published image, never renders directly.
+  std::atomic<uint64_t> previewRequest{0};
+  std::atomic<int64_t> previewRequestTime{0};
+  std::mutex previewMutex;
+  uint64_t previewGeneration = 0, captureGeneration = 0;
+  QImage capturedPreview;
+  gs_texrender_t *previewRender = nullptr;
+  gs_stagesurf_t *previewStage = nullptr;
+  QSize captureSize;
+  int capturePhase = 0;
+  int64_t previewRetryAt = 0;
   std::mutex mutex;
   std::condition_variable cv;
   Request current;
@@ -125,6 +139,9 @@ struct Source {
       audioHandoff->stop();
     if (worker.joinable())
       worker.join();
+    obs_enter_graphics();
+    destroyPreviewGraphics();
+    obs_leave_graphics();
     if (child) {
       obs_source_remove_active_child(parent, child);
       obs_source_release(child);
@@ -520,6 +537,108 @@ struct Source {
     calldata_set_int(call, "width", s->videoWidth.load());
     calldata_set_int(call, "height", s->videoHeight.load());
   }
+  void destroyPreviewGraphics() {
+    if (previewStage)
+      gs_stagesurface_destroy(previewStage);
+    if (previewRender)
+      gs_texrender_destroy(previewRender);
+    previewStage = nullptr;
+    previewRender = nullptr;
+    capturePhase = 0;
+    captureGeneration = 0;
+  }
+  void capturePreview() {
+    const auto gen = epoch.load();
+    const auto now = nowMs();
+    if (capturePhase && (captureGeneration != gen || !accept || resumeGate ||
+                         previewRequest.load() != gen ||
+                         now - previewRequestTime.load() > 2000)) {
+      obs_enter_graphics();
+      destroyPreviewGraphics();
+      obs_leave_graphics();
+    }
+    if (!accept || resumeGate || closing || !gen ||
+        previewRequest.load() != gen ||
+        now - previewRequestTime.load() > 2000 || now < previewRetryAt)
+      return;
+    {
+      std::lock_guard<std::mutex> lock(previewMutex);
+      if (previewGeneration == gen)
+        return;
+    }
+    obs_enter_graphics();
+    if (capturePhase == 0) {
+      auto w = videoWidth.load(), h = videoHeight.load();
+      captureSize = previewSize(w, h);
+      if (validPreviewSize(captureSize)) {
+        previewRender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+        previewStage = gs_stagesurface_create(captureSize.width(),
+                                              captureSize.height(), GS_RGBA);
+        if (previewRender && previewStage &&
+            gs_texrender_begin(previewRender, captureSize.width(),
+                               captureSize.height())) {
+          vec4 zero;
+          vec4_zero(&zero);
+          gs_clear(GS_CLEAR_COLOR, &zero, 0.0f, 0);
+          gs_ortho(0, float(w), 0, float(h), -100, 100);
+          gs_blend_state_push();
+          gs_blend_function(GS_BLEND_ONE, GS_BLEND_ZERO);
+          obs_source_video_render(child);
+          gs_blend_state_pop();
+          gs_texrender_end(previewRender);
+          captureGeneration = gen;
+          capturePhase = 1;
+        } else {
+          destroyPreviewGraphics();
+          previewRetryAt = now + 1000;
+        }
+      }
+    } else if (capturePhase == 1) {
+      gs_stage_texture(previewStage, gs_texrender_get_texture(previewRender));
+      capturePhase = 2;
+    } else {
+      uint8_t *pixels = nullptr;
+      uint32_t stride = 0;
+      QImage image;
+      if (gs_stagesurface_map(previewStage, &pixels, &stride)) {
+        image = copyPreviewFrame(pixels, stride, captureSize);
+        gs_stagesurface_unmap(previewStage);
+      }
+      destroyPreviewGraphics();
+      previewRetryAt = now + 1000;
+      if (visiblePreviewFrame(image) && epoch == gen && accept && !resumeGate) {
+        std::lock_guard<std::mutex> lock(previewMutex);
+        capturedPreview = std::move(image);
+        previewGeneration = gen;
+      }
+    }
+    obs_leave_graphics();
+  }
+  static void previewProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    auto gen = s->epoch.load();
+    calldata_set_int(call, "generation", gen);
+    if (!s->accept || s->resumeGate || !s->videoWidth || !s->videoHeight)
+      return;
+    s->previewRequestTime = nowMs();
+    s->previewRequest = gen;
+    QImage image;
+    {
+      std::lock_guard<std::mutex> lock(s->previewMutex);
+      if (s->previewGeneration != gen ||
+          calldata_int(call, "seen") == int64_t(gen))
+        return;
+      image = s->capturedPreview;
+    }
+    if (s->epoch != gen || !s->accept || s->resumeGate || image.isNull())
+      return;
+    QByteArray raw(reinterpret_cast<const char *>(image.constBits()),
+                   image.sizeInBytes());
+    auto encoded = raw.toBase64();
+    calldata_set_int(call, "width", image.width());
+    calldata_set_int(call, "height", image.height());
+    calldata_set_string(call, "pixels", encoded.constData());
+  }
   static void infoProc(void *data, calldata_t *call) {
     auto s = static_cast<Source *>(data);
     std::lock_guard<std::mutex> lock(s->mutex);
@@ -722,6 +841,7 @@ struct Source {
       loading = false;
     }
     processQueue();
+    capturePreview();
     std::optional<std::pair<uint64_t, int64_t>> seekRequest;
     Request seekReq;
     {
@@ -975,6 +1095,10 @@ void *create(obs_data_t *settings, obs_source_t *parent) {
                    "void streaming_media_status(out string title, out string "
                    "error, out int width, out int height)",
                    Source::statusProc, s);
+  proc_handler_add(proc,
+                   "void streaming_media_preview(int seen, out int generation, "
+                   "out int width, out int height, out string pixels)",
+                   Source::previewProc, s);
   proc_handler_add(proc, "void streaming_media_info(out string json)",
                    Source::infoProc, s);
   proc_handler_add(proc,

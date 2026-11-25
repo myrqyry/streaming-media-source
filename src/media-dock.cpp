@@ -3,6 +3,7 @@
 #include "media-runtime.hpp"
 #include "playlist-import.hpp"
 #include "playlist-metadata.hpp"
+#include "preview-frame.hpp"
 #include "runtime-update.hpp"
 #include <QApplication>
 #include <QBuffer>
@@ -283,7 +284,7 @@ public:
 struct CachedPlaylistItem {
   PlaylistMetadata metadata;
   QImage image;
-  bool titleDone = false, imageDone = false;
+  bool titleDone = false, imageDone = false, generated = false;
 };
 class MediaDock : public QWidget {
   QVBoxLayout *mainLayout = nullptr;
@@ -537,6 +538,8 @@ class MediaDock : public QWidget {
   }
 
   QImage previewImage;
+  qint64 seenPreviewGeneration = 0;
+  QElapsedTimer previewWait;
   bool themeRefreshPending = false, themeReady = false;
   QComboBox *sources;
   QLineEdit *url;
@@ -730,10 +733,21 @@ class MediaDock : public QWidget {
     if (idx >= 0)
       sources->setCurrentIndex(idx);
   }
-  void preview(const QString &id, const QString &imageUrl = {}) {
-    if (id == thumbId)
-      return;
+  void preview(const QString &id, const QString &imageUrl = {},
+               bool preferFrame = false) {
+    if (id == thumbId) {
+      if (!preferFrame && previewWait.isValid() &&
+          previewWait.elapsed() > 5000 && previewImage.isNull() &&
+          !thumbnailReply) {
+        thumbId.clear();
+      } else
+        return;
+    }
     thumbId = id;
+    seenPreviewGeneration = 0;
+    previewWait.invalidate();
+    thumbnail->setProperty("generatedPreview", false);
+    thumbnail->setToolTip({});
     if (thumbnailReply) {
       auto old = thumbnailReply.data();
       thumbnailReply = nullptr;
@@ -746,6 +760,10 @@ class MediaDock : public QWidget {
     auto provider = external ? mediaProvider(id.mid(9).section('|', 0, 0))
                              : MediaProvider::YouTube;
     thumbnail->setText(id.isEmpty() ? "No video" : "Preview unavailable");
+    if (preferFrame) {
+      previewWait.start();
+      return;
+    }
     if (id.isEmpty() || !isVisible() ||
         (external && !validThumbnailUrl(imageUrl, provider)))
       return;
@@ -778,6 +796,55 @@ class MediaDock : public QWidget {
       }
       reply->deleteLater();
     });
+  }
+  void generatedPreview(obs_source_t *source, const QString &current) {
+    if (!isVisible() || current.isEmpty())
+      return;
+    calldata_t call;
+    calldata_init(&call);
+    calldata_set_int(&call, "seen", seenPreviewGeneration);
+    proc_handler_call(obs_source_get_proc_handler(source),
+                      "streaming_media_preview", &call);
+    auto gen = calldata_int(&call, "generation");
+    auto raw = calldata_string(&call, "pixels");
+    auto image = raw ? decodePreviewFrame(QByteArray(raw),
+                                          int(calldata_int(&call, "width")),
+                                          int(calldata_int(&call, "height")))
+                     : QImage{};
+    calldata_free(&call);
+    if (gen != seenPreviewGeneration && seenPreviewGeneration) {
+      // A reload of the same URL must not be mistaken for an already
+      // captured generation. Keep the old still while new media opens.
+      seenPreviewGeneration = 0;
+    }
+    if (image.isNull())
+      return;
+    seenPreviewGeneration = gen;
+    previewWait.invalidate();
+    if (thumbnailReply) {
+      auto old = thumbnailReply.data();
+      thumbnailReply = nullptr;
+      old->abort();
+      old->deleteLater();
+    }
+    previewImage = image;
+    thumbnail->setText({});
+    thumbnail->setProperty("generatedPreview", true);
+    thumbnail->setToolTip("Preview captured from playback");
+    scalePreview();
+    auto key = cacheKey(current);
+    if (!key.isEmpty()) {
+      auto cached = playlistCache.object(key);
+      if (!cached) {
+        cached = new CachedPlaylistItem;
+        playlistCache.insert(key, cached);
+      }
+      cached->image =
+          image.scaled(160, 90, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+      cached->imageDone = true;
+      cached->generated = true;
+      refreshQueueMetadata(key);
+    }
   }
   void decorateQueueItem(QListWidgetItem *item) {
     auto u = item->data(UrlRole).toString();
@@ -979,7 +1046,7 @@ class MediaDock : public QWidget {
                           cached->metadata.title = parsed.title;
                         if (!parsed.author.isEmpty())
                           cached->metadata.author = parsed.author;
-                      } else {
+                      } else if (!cached->generated) {
                         cached->image = decodeThumbnail(bytes, QSize(160, 90));
                       }
                     }
@@ -1080,7 +1147,8 @@ class MediaDock : public QWidget {
           playlistCache.insert(key, cached);
         }
         if (cached->metadata.details != info) {
-          if (mediaProvider(current) != MediaProvider::YouTube &&
+          if (!cached->generated &&
+              mediaProvider(current) != MediaProvider::YouTube &&
               cached->metadata.details.value("thumbnail") !=
                   info.value("thumbnail")) {
             cached->imageDone = false;
@@ -1126,9 +1194,16 @@ class MediaDock : public QWidget {
       status->setToolTip(status->text());
       auto twitch = canonicalProviderUrl(current);
       auto imageUrl = info.value("thumbnail").toString();
+      const bool playingFrame =
+          w > 0 && h > 0 &&
+          (state == OBS_MEDIA_STATE_PLAYING || state == OBS_MEDIA_STATE_PAUSED);
       preview(twitch.isEmpty() ? videoId(current)
                                : "provider:" + twitch + "|" + imageUrl,
-              imageUrl);
+              imageUrl,
+              playingFrame &&
+                  (!previewWait.isValid() || previewWait.elapsed() < 5000));
+      if (playingFrame)
+        generatedPreview(s.get(), current);
     }
     auto pos = present ? obs_source_media_get_time(s.get()) : 0;
     if (!seeking && !timeline->isSliderDown()) {
