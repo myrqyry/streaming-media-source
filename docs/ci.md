@@ -23,7 +23,7 @@ versioned workflow only after the pilots qualify.
 
 The workflow runs on pull requests, pushes to main/master and the qualification branches, and manual
 dispatch. It has read-only repository permissions and no automatic
-release or binary upload. The checksum is recorded in the run summary.
+release. Verified module-only test archives and their SHA-256 checksums are uploaded with 14-day retention after all build/test/package gates pass. The checksum is recorded in the run summary.
 A passing job establishes the tested Linux SDK/build/package path, not
 interactive OBS behavior, GPU-driver coverage, or cross-platform support.
 No user OBS profile is modified by the verifier.
@@ -86,7 +86,7 @@ No yt-dlp or Deno executables, runtime dependency DLLs, or third-party
 frameworks are copied into these packages.
 
 The OBS 32.2.0 baseline passed all four hosted jobs in [run 45528453220](https://github.com/myrqyry/streaming-media-source/actions/runs/45528453220). The later merged video/audio baseline passed all eight OBS 32/33 matrix jobs in [run 45542976014](https://github.com/myrqyry/streaming-media-source/actions/runs/45542976014). TikTok-specific changes remain outside that hosted qualification.
-Neither CI test archives nor release binaries are uploaded. Actual OBS
+CI test archives are eligible for artifact upload; no release binaries are published. Actual OBS
 load, playback, audio, playlist imports, and clean teardown on the target
 platforms remain necessary before claiming production support.
 
@@ -186,4 +186,4 @@ verified locally; the seven Python verifier tests and all nine C++
 regressions passed with the pinned OBS 32 SDK. Both legacy and modern
 package layouts were staged with identical module bytes using that SDK.
 That validates packaging, not OBS 33 binary compatibility. The subsequent merged video/audio baseline passed actual native builds, deterministic tests and packaging across the complete OBS 32/33 matrix ([run 45542976014](https://github.com/myrqyry/streaming-media-source/actions/runs/45542976014)). Actual OBS 33 playback and the newer TikTok matrix remain unqualified.
-The full matrix covers eight jobs; no binaries are published by CI.
+The full matrix covers eight jobs. The reusable workflow uploads exactly one verified module-only test archive plus SHA256SUMS per job; hosted artifact upload on this new branch remains to be qualified. No release is created.

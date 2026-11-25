@@ -739,3 +739,17 @@ Selected visually inspected dock-only images (410x530), optimized PNGs
 with no profile data or raw logs included. Video queue scrolls normally.
 README now shows both source modes. Owner requested branch push; added
 feature/tiktok-video to the existing CI branch triggers for qualification.
+
+## Shared CI pilot
+Owner wants consistent CI across OBS plugins and downloadable test builds.
+Fetched merged master 2fbb807 (PR #4); created ci/shared-plugin-build from
+that commit. Local shared project ~/loam/obs-plugin-ci contains the
+reusable eight-job build matrix, contract tests, and adoption plan.
+Streaming Media temporarily calls the identical local workflow until the
+shared project is published and the remote workflow reference qualified.
+Caller verifiers remain unchanged apart from Linux archive name
+normalization and summary text; native/SDK-specific qualification stays
+in place. Only exact verified archive and SHA256SUMS uploaded, 14-day
+retention, no release. Red/green contract tests 3/3, native verifier 7/7,
+README test 1/1; actual previous verified Linux archive passed handoff.
+Hosted upload and central invocation pending. No other plugins modified.

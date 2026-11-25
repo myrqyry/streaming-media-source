@@ -1,0 +1,140 @@
+name: Native OBS plugin build
+
+on:
+  workflow_call:
+    inputs:
+      module:
+        description: Installed OBS module name
+        required: true
+        type: string
+      minimum-tests:
+        description: Minimum Linux regression test count
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }} · OBS ${{ matrix.obs }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            label: Linux x86_64
+            runner: ubuntu-24.04
+            obs: "32.2.0"
+            extension: tar.gz
+          - target: windows-x64
+            label: Windows x64
+            runner: windows-2025-vs2026
+            obs: "32.2.0"
+            extension: zip
+          - target: macos-arm64
+            label: macOS Apple Silicon
+            runner: macos-26
+            obs: "32.2.0"
+            extension: zip
+          - target: macos-x86_64
+            label: macOS Intel
+            runner: macos-26-intel
+            obs: "32.2.0"
+            extension: zip
+          - target: linux-x86_64
+            label: Linux x86_64
+            runner: ubuntu-26.04
+            obs: "33.0.3"
+            extension: tar.gz
+          - target: windows-x64
+            label: Windows x64
+            runner: windows-2025-vs2026
+            obs: "33.0.3"
+            extension: zip
+          - target: macos-arm64
+            label: macOS Apple Silicon
+            runner: macos-26
+            obs: "33.0.3"
+            extension: zip
+          - target: macos-x86_64
+            label: macOS Intel
+            runner: macos-26-intel
+            obs: "33.0.3"
+            extension: zip
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      MODULE: ${{ inputs.module }}
+      MINIMUM_TESTS: ${{ inputs.minimum-tests }}
+      OBS_VERSION: ${{ matrix.obs }}
+      ARCHIVE: ${{ format('{0}-{1}-obs{2}-test.{3}', inputs.module, matrix.target, matrix.obs, matrix.extension) }}
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate build inputs
+        shell: bash
+        run: |
+          [[ "$MODULE" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
+          [[ "$MINIMUM_TESTS" =~ ^[1-9][0-9]*$ ]]
+      - name: Check README links and verifier tests
+        if: runner.os == 'Linux'
+        run: |
+          python3 .github/scripts/test-verify-native.py
+          python3 .github/scripts/test-readme-links.py
+          python3 .github/scripts/check_readme_links.py README.md
+      - name: Install native Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config curl ca-certificates \
+            xvfb xauth libgl1-mesa-dri qt6-base-dev qt6-base-private-dev qt6-svg-dev \
+            extra-cmake-modules libsimde-dev uthash-dev uuid-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
+            libpulse-dev libasound2-dev libjansson-dev libdrm-dev libegl-dev \
+            libgl-dev libopengl-dev libwayland-dev wayland-protocols \
+            libxkbcommon-dev libx11-dev libx11-xcb-dev libxcb1-dev \
+            libxcb-xinput-dev libglib2.0-dev zlib1g-dev
+      - name: Prepare pinned OBS SDK
+        if: runner.os == 'Linux'
+        run: bash .github/scripts/prepare-obs32-sdk.sh "$RUNNER_TEMP/obs-sdk" "$OBS_VERSION"
+      - name: Build, test and verify Linux package
+        if: runner.os == 'Linux'
+        run: bash .github/scripts/verify-linux.sh "$RUNNER_TEMP/obs-sdk/sdk" "$RUNNER_TEMP/plugin-ci" "$MODULE" "$MINIMUM_TESTS"
+      - name: Build, test and verify Windows or macOS package
+        if: runner.os != 'Linux'
+        shell: bash
+        run: python .github/scripts/verify-native.py "$RUNNER_TEMP/plugin-ci" --obs-version "$OBS_VERSION"
+      - name: Verify artifact handoff
+        shell: bash
+        run: |
+          python - <<'PYTHON'
+          import hashlib, os
+          from pathlib import Path
+          work = Path(os.environ["RUNNER_TEMP"]) / "plugin-ci"
+          archive = work / os.environ["ARCHIVE"]
+          checksums = work / "SHA256SUMS"
+          if archive.is_symlink() or checksums.is_symlink() or not archive.is_file() or not checksums.is_file() or archive.stat().st_size == 0:
+              raise SystemExit("Missing or invalid verified package")
+          with archive.open("rb") as f:
+              digest = hashlib.file_digest(f, "sha256").hexdigest()
+          expected = digest + "  " + archive.name + "\n"
+          if checksums.read_text(encoding="utf-8") != expected:
+              raise SystemExit("Archive name or SHA-256 mismatch")
+          if os.getenv("GITHUB_STEP_SUMMARY"):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write("### Verified module-only test package\n\n```\n" + expected + "```\n")
+          PYTHON
+      - name: Upload verified test package
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ inputs.module }}-${{ matrix.target }}-obs${{ matrix.obs }}-test
+          path: |
+            ${{ runner.temp }}/plugin-ci/${{ env.ARCHIVE }}
+            ${{ runner.temp }}/plugin-ci/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
