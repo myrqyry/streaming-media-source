@@ -5,6 +5,7 @@
 #include "media-runtime.hpp"
 #include "media-websocket.hpp"
 #include "playlist-import.hpp"
+#include "playlist-metadata.hpp"
 #include "preview-frame.hpp"
 #include "resolver.hpp"
 #include "runtime-update.hpp"
@@ -17,6 +18,7 @@
 #include <QJsonObject>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QStorageInfo>
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QUuid>
@@ -74,6 +76,8 @@ struct Source {
   const bool audioOnly;
   std::atomic<uint64_t> audioSeen{0};
   QTemporaryDir temp;
+  std::shared_ptr<QTemporaryDir> activeCache;
+  QList<std::shared_ptr<QTemporaryDir>> retiredCaches;
   std::atomic<bool> closing{false}, accept{false}, loading{false},
       failed{false}, finished{false};
   std::atomic<int64_t> finalDuration{0}, kickClipReportedDuration{0};
@@ -198,6 +202,9 @@ struct Source {
     auto blank = obs_data_create();
     obs_data_set_bool(blank, "is_local_file", false);
     obs_data_set_string(blank, "input", "");
+    obs_data_set_string(blank, "local_file", "");
+    if (activeCache)
+      retiredCaches.append(std::move(activeCache));
     obs_source_update(child, blank);
     obs_data_release(blank);
   }
@@ -271,6 +278,89 @@ struct Source {
     }
     cv.notify_one();
   }
+  Media downloadTikTok(const Request &r, const MediaRuntime &engine,
+                       const QByteArray &metadata) {
+    Media m;
+    m.error = "No reachable public TikTok MP4; temporary download unavailable";
+    auto root = QJsonDocument::fromJson(metadata).object();
+    auto canonical = canonicalProviderUrl(r.url);
+    if (root.value("id").toString() != canonical.section('/', -1))
+      return m;
+    auto candidates = tiktokDownloadCandidates(metadata, r.height);
+    if (candidates.isEmpty())
+      return m;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
+    for (const auto &candidate : candidates) {
+      if (closing || epoch != r.id ||
+          std::chrono::steady_clock::now() >= deadline)
+        return m;
+      auto cache = std::make_shared<QTemporaryDir>(QDir::tempPath() +
+                                                   "/obs-tiktok-XXXXXX");
+      if (!cache->isValid() || QStorageInfo(cache->path()).bytesAvailable() <
+                                   2 * TikTokDownloadLimit)
+        return m;
+      auto path = cache->filePath("clip.mp4");
+      QProcess downloader;
+      downloader.setProgram(engine.extractor);
+      downloader.setArguments({"--ignore-config",
+                               "--no-playlist",
+                               "--use-extractors",
+                               "tiktok",
+                               "--no-progress",
+                               "--no-warnings",
+                               "--no-part",
+                               "--no-mtime",
+                               "--no-continue",
+                               "--socket-timeout",
+                               "8",
+                               "--retries",
+                               "0",
+                               "--max-filesize",
+                               QString::number(TikTokDownloadLimit),
+                               "-f",
+                               candidate.downloadSelector,
+                               "-o",
+                               path,
+                               "--",
+                               canonical});
+      downloader.setStandardOutputFile(QProcess::nullDevice());
+      downloader.setStandardErrorFile(QProcess::nullDevice());
+      downloader.start();
+      if (!downloader.waitForStarted(1500))
+        continue;
+      bool aborted = false;
+      while (downloader.state() != QProcess::NotRunning) {
+        downloader.waitForFinished(50);
+        if (closing || epoch != r.id ||
+            std::chrono::steady_clock::now() >= deadline ||
+            QFileInfo(path).size() > TikTokDownloadLimit) {
+          downloader.kill();
+          downloader.waitForFinished(1000);
+          aborted = true;
+          break;
+        }
+      }
+      if (aborted || closing || epoch != r.id)
+        return m;
+      QFileInfo file(path);
+      if (downloader.exitStatus() != QProcess::NormalExit ||
+          downloader.exitCode() != 0 || !file.isFile() || file.isSymLink() ||
+          file.size() != candidate.expectedBytes ||
+          file.size() > TikTokDownloadLimit)
+        continue;
+      QFile mp4(path);
+      if (!mp4.open(QIODevice::ReadOnly) || mp4.read(12).mid(4, 4) != "ftyp")
+        continue;
+      mp4.close();
+      m.info = normalizedMediaInfo(root, MediaProvider::TikTok);
+      m.title = m.info.value("title").toString();
+      m.localFile = path;
+      m.temporaryMedia = std::move(cache);
+      m.error.clear();
+      return m;
+    }
+    return m;
+  }
   Media resolve(const Request &r) {
     Media m;
     auto engine = runtime();
@@ -332,6 +422,8 @@ struct Source {
                 "availability";
       return m;
     }
+    if (provider == MediaProvider::TikTok && !audioOnly)
+      return downloadTikTok(r, engine, output);
     if (audioOnly) {
       QHash<QString, TwitchVodSlice> slices;
       auto selected = selectAudioMedia(
@@ -879,7 +971,10 @@ struct Source {
   void tick() {
     // OBS applies video-source updates on a later video tick. Do not admit
     // old decoder frames/audio or signals while that update is pending.
-    if (waitingDecoder && decoderUpdated.exchange(false)) {
+    const bool updated = decoderUpdated.exchange(false);
+    if (updated)
+      retiredCaches.clear();
+    if (waitingDecoder && updated) {
       waitingDecoder = false;
       decoderEnded = false;
       accept = true;
@@ -977,9 +1072,18 @@ struct Source {
       }
       f.close();
     }
+    if (r->media.temporaryMedia && retiredCaches.size() >= 2) {
+      fail("Previous temporary media is still closing");
+      return;
+    }
     auto settings = obs_data_create();
-    obs_data_set_bool(settings, "is_local_file", false);
+    bool cached = bool(r->media.temporaryMedia);
+    obs_data_set_bool(settings, "is_local_file", cached);
+    obs_data_set_string(settings, "local_file", qPrintable(r->media.localFile));
     obs_data_set_string(settings, "input", qPrintable(input));
+    if (activeCache)
+      retiredCaches.append(std::move(activeCache));
+    activeCache = std::move(r->media.temporaryMedia);
     auto twitch = mediaProvider(r->req.url) != MediaProvider::YouTube;
     obs_data_set_string(settings, "input_format",
                         audioOnly ? (r->media.hlsDirect ? "hls" : "")
@@ -988,7 +1092,8 @@ struct Source {
                             ? ""
                             : "hls");
     obs_data_set_string(settings, "ffmpeg_options",
-                        audioOnly
+                        cached ? "protocol_whitelist=file"
+                        : audioOnly
                             ? (r->media.manifest.isEmpty()
                                    ? "protocol_whitelist=https,tcp,tls"
                                    : "protocol_whitelist=file,https,tcp,tls "
@@ -1044,7 +1149,8 @@ struct Source {
     failed = false;
     blog(LOG_INFO, "[streaming-media] Media resolved (%s, %s)",
          r->media.live ? "live" : "VOD",
-         r->media.segmentVod           ? "indexed HLS"
+         cached                        ? "temporary MP4"
+         : r->media.segmentVod         ? "indexed HLS"
          : r->media.manifest.isEmpty() ? "combined"
                                        : "HLS playlist");
   }

@@ -17,22 +17,29 @@ desktop capture, listening port, or full-video download.
 > locally exercised target. Public release packages are not available.
 > [Build checks](https://github.com/myrqyry/streaming-media-source/actions) · [Release readiness](RELEASE_CHECKLIST.md) · [Changelog](CHANGELOG.md)
 
-## Experimental TikTok video route
+## TikTok video posts (initial support)
 
-This development branch recognizes full public TikTok post URLs
-(`https://www.tiktok.com/@creator/video/...`) in **Streaming Media** only.
-It selects combined H.264/AAC progressive MP4 with known dimensions on
-the two observed TikTok video hosts, using the shorter image edge for
-the resolution limit on portrait posts. No live channels, short-share
-redirects, photo posts, private posts, DRM or arbitrary CDN URLs.
+**Streaming Media** accepts full public TikTok post URLs
+(`https://www.tiktok.com/@creator/video/...`). TikTok's CDN rejected
+direct HTTP playback in our tests, but the bundled yt-dlp downloader
+successfully retrieved the owner's public test video. This provider
+therefore buffers a complete temporary H.264/AAC MP4 before playback
+through OBS's native FFmpeg source; it does not use a browser.
 
-**Not yet qualified for playback.** The pinned extractor returned metadata
-and combined MP4 renditions for public samples, but media CDN requests
-returned HTTP 403 even with the extractor's own HTTP headers. The isolated
-OBS playback test failed with a controlled resolution error and no audio
-or video. No browser fallback, cookie access or access-control workaround
-is included. TikTok is not a supported provider until real playback,
-transport, metadata and queue advancement pass.
+Downloads require a known file size up to 64 MiB, a validated format and
+observed provider host, sufficient free disk space, and a bounded download
+deadline. Cancellation and source changes discard stale results; temporary
+media is retired after decoder updates and removed on normal teardown.
+No persistent media library, cookies, private posts, DRM, live channels,
+short-share redirects or photo posts are supported. Other providers retain
+their existing streaming paths.
+
+Verified on Linux OBS 32.2 using a public 576 × 576, 155-second post:
+real video and mixer audio, pause/seek/resume, generated preview, queue
+editing, YouTube-to-TikTok automatic advancement, stop and source teardown.
+No temporary MP4 remained after the isolated test. Additional TikTok
+posts, TikTok's own natural EOF advancement, cancellation mid-download,
+crash cleanup and Windows/macOS/OBS 33 playback still need qualification.
 
 ## Streaming Audio
 

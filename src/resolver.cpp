@@ -493,6 +493,44 @@ static bool tiktokPostFormat(const QJsonObject &root, const QJsonObject &f) {
          h <= 4320 &&
          validMediaUrl(f.value("url").toString(), MediaProvider::TikTok);
 }
+QList<TikTokDownloadCandidate> tiktokDownloadCandidates(const QByteArray &json,
+                                                        int maxHeight) {
+  const auto root = QJsonDocument::fromJson(json).object();
+  struct Candidate {
+    TikTokDownloadCandidate choice;
+    double quality;
+  };
+  QList<Candidate> eligible;
+  const auto items = root.value("formats").toArray();
+  static const QRegularExpression idPattern("^h264_[A-Za-z0-9_-]{1,80}$");
+  for (int i = 0; i < items.size() && i < 1000; ++i) {
+    auto f = items[i].toObject();
+    auto id = f.value("format_id").toString();
+    double size = f.value("filesize").toDouble(-1);
+    int w = f.value("width").toInt(), h = f.value("height").toInt();
+    if (!tiktokPostFormat(root, f) || !idPattern.match(id).hasMatch() ||
+        std::min(w, h) > maxHeight || !std::isfinite(size) || size <= 0 ||
+        size > TikTokDownloadLimit || std::floor(size) != size)
+      continue;
+    auto host = QUrl(f.value("url").toString()).host();
+    auto selector =
+        id + "[protocol=https][ext=mp4][vcodec=h264][acodec=aac][filesize<=" +
+        QString::number(TikTokDownloadLimit) + "][url^=\"https://" + host +
+        "/\"]";
+    eligible.prepend({{id, selector, qint64(size)},
+                      double(h) * 1000000 + f.value("tbr").toDouble()});
+  }
+  std::stable_sort(
+      eligible.begin(), eligible.end(),
+      [](const auto &a, const auto &b) { return a.quality > b.quality; });
+  QList<TikTokDownloadCandidate> result;
+  for (const auto &c : eligible) {
+    if (result.size() >= 4)
+      break;
+    result.append(c.choice);
+  }
+  return result;
+}
 Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
   Media m;
   QJsonParseError e;

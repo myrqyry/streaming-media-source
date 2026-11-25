@@ -28,7 +28,8 @@ bool validThumbnailUrl(const QString &url, MediaProvider provider) {
     return false;
   auto h = u.host().toLower();
   if (provider == MediaProvider::TikTok)
-    return h == "p16-common-sign.tiktokcdn-us.com" &&
+    return (h == "p16-common-sign.tiktokcdn-us.com" ||
+            h == "p19-common-sign.tiktokcdn-us.com") &&
            !u.authority().contains('@');
   if (provider == MediaProvider::SoundCloud)
     return h == "i1.sndcdn.com";

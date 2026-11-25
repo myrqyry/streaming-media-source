@@ -61,3 +61,5 @@ No release binaries should be published until the remaining gates are met.
   The SDK pins and layout verification alone do not establish compatibility.
 
 - Streaming Audio: local OBS 32.2 mixer/transport/artwork/cross-provider EOF smokes passed; qualify audio recovery, SoundCloud collection playback/metadata, HLS artwork and remote requests in audio mode, OBS 33 and native Windows/macOS playback before declaring support.
+
+- TikTok: owner sample passed Linux OBS 32.2 playback and normal cleanup; qualify additional posts, natural EOF from TikTok, cancellation mid-download, crash cleanup and OBS 33/Windows/macOS before broader support claims.

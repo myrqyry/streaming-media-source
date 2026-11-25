@@ -166,6 +166,26 @@ int main(int argc, char **argv) {
              MediaProvider::TikTok)
              .error.isEmpty(),
         "root DRM denied");
+  QByteArray cachedTikTok = R"({"extractor_key":"TikTok","formats":[
+    {"format_id":"h264_540p_498357-0","url":"https://v16-webapp-prime.us.tiktok.com/a","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"aac","width":576,"height":576,"filesize":9687204},
+    {"format_id":"h264_540p_498357-1","url":"https://v19-webapp-prime.us.tiktok.com/b","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"aac","width":576,"height":576,"filesize":9687204},
+    {"format_id":"h264_540p_big","url":"https://v19-webapp-prime.us.tiktok.com/c","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"aac","width":576,"height":576,"filesize":67108865},
+    {"format_id":"h264_540p_unknown","url":"https://v19-webapp-prime.us.tiktok.com/d","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"aac","width":576,"height":576},
+    {"format_id":"h264_bad+other","url":"https://v19-webapp-prime.us.tiktok.com/e","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"aac","width":576,"height":576,"filesize":10}]})";
+  auto candidates = tiktokDownloadCandidates(cachedTikTok, 720);
+  check(candidates.size() == 2 &&
+            candidates[0].formatId == "h264_540p_498357-1" &&
+            candidates[0].expectedBytes == 9687204 &&
+            candidates[0].downloadSelector.contains(
+                "[url^=\"https://v19-webapp-prime.us.tiktok.com/\"]"),
+        "bounded exact-format TikTok download candidates");
+  check(tiktokDownloadCandidates(cachedTikTok, 360).isEmpty(),
+        "download resolution limit");
+  check(tiktokDownloadCandidates(protectedRoot, 720).isEmpty(),
+        "protected post cannot use download route");
+  check(validThumbnailUrl("https://p19-common-sign.tiktokcdn-us.com/image",
+                          MediaProvider::TikTok),
+        "second observed TikTok thumbnail host");
   MediaQueue tiktokQueue;
   check(tiktokQueue.append(tt + "?share=1") &&
             tiktokQueue.items() == QStringList{tt} &&
