@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build against an explicit SDK; verify native tests and staged package.
-# Never install into a user's OBS profile or upload a distributable.
+# Never install into a user's OBS profile. The caller may upload the verified module-only test package.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 sdk="$(realpath "$1")"
@@ -24,8 +24,8 @@ PIN
 )"
 read -r rev digest <<< "$pin_values"
 case "$version" in
-  32.2.0) layout=legacy; module_dir=bin/64bit/; archive_version=obs32 ;;
-  33.0.3) layout=modern; module_dir=; archive_version=obs33 ;;
+  32.2.0) layout=legacy; module_dir=bin/64bit/; archive_version=obs32.2.0 ;;
+  33.0.3) layout=modern; module_dir=; archive_version=obs33.0.3 ;;
   *) echo "Unsupported OBS SDK: $version" >&2; exit 1 ;;
 esac
 args=()

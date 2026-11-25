@@ -277,7 +277,7 @@ def main():
     print(f"{target}: {len(cases)} tests; native module/notice archive validated")
     if os.getenv("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
-            f.write(f"### {target}: native build and test archive (not uploaded)\n\n")
+            f.write(f"### {target}: native build and test archive (verified locally)\n\n")
             f.write(f"OBS {version}; {len(cases)} tests passed.\n\n```\n{checksum}```\n")
 
 

@@ -81,7 +81,7 @@ The bundled Linux x86_64 runtime includes yt-dlp and Deno. Module-only builds ca
 | macOS Apple Silicon | Passed | Passed |
 | macOS Intel | Passed | Passed |
 
-**Build, test and packaging baseline:** all eight jobs passed on the merged video/audio baseline in [CI run 45542976014](https://github.com/myrqyry/streaming-media-source/actions/runs/45542976014). The newer TikTok changes passed nine local regression tests and the owner's real playback smoke on Linux OBS 32.2; the hosted matrix has not yet been rerun for them.
+**Build, test and packaging baseline:** all eight jobs passed on the merged video/audio baseline in [CI run 45542976014](https://github.com/myrqyry/streaming-media-source/actions/runs/45542976014). TikTok also passed all eight hosted build/test/package jobs on the [merged baseline](https://github.com/myrqyry/streaming-media-source/actions/runs/45554656640), and the owner’s Linux OBS 32.2 playback smoke. The reusable workflow adds downloadable module-only test archives and checksums; its new hosted artifact path is not yet qualified.
 
 **Runtime qualification:** native Linux OBS 32.2 is the exercised playback environment. OBS 33, Windows/macOS playback and Flatpak still need qualification. Build for the correct SDK and use its corresponding install layout. Do not install an OBS 33 module into OBS 32.
 
