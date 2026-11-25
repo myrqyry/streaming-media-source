@@ -5,10 +5,11 @@
 One native plugin, two source types, a shared playback dock. Queue links from different services, import collections, and route audio through the OBS mixer.
 
 <p align="center">
-  <img src="docs/streaming-media-dock.png" alt="Streaming Media dock with preview, timeline and visual queue" width="308">
+  <img src="docs/streaming-media-dock.png" alt="Streaming Media playing YouTube with TikTok, Twitch and Kick queued" width="410">
+  <img src="docs/streaming-audio-dock.png" alt="Streaming Audio playing Bandcamp with SoundCloud and YouTube queued" width="410">
 </p>
 
-<p align="center"><sub>Dock preview from an earlier build (0.5.1); current versions also support collection imports and Streaming Audio.</sub></p>
+<p align="center"><sub>Streaming Media and Streaming Audio in OBS 32.2, using the built-in Yami dark theme and real mixed-provider queues.</sub></p>
 
 [Quick start](#quick-start) · [Providers](#providers) · [Playlists](#playlists) · [Installation](#installation) · [Compatibility](#compatibility) · [Documentation](#documentation)
 

@@ -729,3 +729,13 @@ all eight OBS 32/33 hosted jobs (run 45542976014); newer TikTok branch
 has not run that matrix. Updated related CI/runtime/release notes.
 Checked relative file links, heading anchors and README link regression.
 Documentation-only local checkpoint; no further install or publication.
+
+## Current dock screenshots
+Captured installed 883d53a video and audio docks with mixed-provider
+queues in separate disposable OBS 32.2/Xvfb profiles. Resolved inherited
+profile location overrides to use the built-in Yami dark theme; actual
+media and native control icons visible. Both capture processes exited 0.
+Selected visually inspected dock-only images (410x530), optimized PNGs
+with no profile data or raw logs included. Video queue scrolls normally.
+README now shows both source modes. Owner requested branch push; added
+feature/tiktok-video to the existing CI branch triggers for qualification.

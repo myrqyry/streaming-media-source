@@ -37,8 +37,7 @@ Before a first public release:
   Validate production GPU decoding separately from Xvfb/software decoding.
 - Completed: v0.5.1 dock screenshot from a disposable OBS scene,
   issue template with version and redaction guidance, local package
-  instructions and troubleshooting table. Refresh the screenshot for the
-  playlist import UI before public release.
+  instructions and troubleshooting table. Updated: current video and audio dock screenshots captured in disposable OBS 32.2 profiles.
 - v0.6.0 playlist import and normal playback smoke passed with the bundled
   engine; 9 native CTest cases passed. Mixed-link choice and source-change
   cancellation were not independently exercised in the live smoke.
