@@ -5,16 +5,19 @@ published.
 
 ## Unreleased — Twitch provider
 
-- Public Twitch live channels and clips, sharing the existing native
+- Public Twitch live channels, clips and completed VODs, sharing the existing native
   decoder, mixer routing and mixed-provider queue.
 - Provider-specific URL/extractor and CDN validation, canonical Twitch
   channel/clip identities, bounded HTTPS preflight and live HLS checks.
 - Source name becomes Streaming Media; the persisted source ID is unchanged.
 - Verified isolated Linux OBS playback for a public live channel and clip.
-  Twitch VODs, offline polling and audio-only mode remain future work.
+  Offline polling and audio-only mode remain future work.
 - Reuse normalized extractor metadata for the current item and enrich
   visible Twitch queue items with independent bounded lookups, including
   thumbnails, channel/category, duration, optional counts and details.
+- Completed Twitch VODs: validated finite TS/fMP4 HLS snapshots, relative
+  timeline, native TS seeks and segment-indexed fMP4 seeks. Real nine-hour
+  recordings tested in both formats, including EOF-driven queue advancement.
 - Real live/clip cross-queue smoke tests confirmed current and queued
   thumbnails and metadata while mixer audio continued.
 

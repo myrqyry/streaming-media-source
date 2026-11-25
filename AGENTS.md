@@ -1,6 +1,6 @@
 # Streaming Media
 Standalone OBS C++/Qt Core plugin. Keep provider-specific validation, starting with YouTube and public Twitch
-channels/clips, and use the existing OBS FFmpeg source as playback owner.
+channels/clips/completed VODs, and use the existing OBS FFmpeg source as playback owner.
 Do not widen supported hosts or generic extractor access without evidence. No unrelated Aftermarket edits.
 Read ACTIVE_WORK.md before continuing. Build and run deterministic CTest,
 then use the isolated libobs smoke for real network playback changes.

@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QUrl>
 #include <algorithm>
+#include <cmath>
 bool validYoutube(const QString &s) {
   QUrl u(s, QUrl::StrictMode);
   auto h = u.host().toLower();
@@ -38,6 +39,10 @@ QString canonicalTwitchUrl(const QString &s) {
   }
   if (host != "twitch.tv" && host != "www.twitch.tv" && host != "m.twitch.tv")
     return {};
+  static const QRegularExpression vod("^/videos/([1-9][0-9]{0,19})/?$");
+  auto v = vod.match(path);
+  if (v.hasMatch())
+    return "https://www.twitch.tv/videos/" + v.captured(1);
   auto c = channelClip.match(path);
   if (c.hasMatch())
     return "https://clips.twitch.tv/" + c.captured(1);
@@ -52,6 +57,23 @@ QString canonicalTwitchUrl(const QString &s) {
       "turbo",     "drops",     "prime",         "friends",   "messages",
       "dashboard", "moderator", "team",          "store",     "products"};
   return reserved.contains(id) ? QString{} : "https://www.twitch.tv/" + id;
+}
+QString twitchExtractor(const QString &url) {
+  auto u = canonicalTwitchUrl(url);
+  if (u.isEmpty())
+    return {};
+  if (u.startsWith("https://clips.twitch.tv/"))
+    return "twitch:clips";
+  if (u.startsWith("https://www.twitch.tv/videos/"))
+    return "twitch:vod";
+  return "twitch:stream";
+}
+QString twitchExtractorKey(const QString &url) {
+  auto e = twitchExtractor(url);
+  return e == "twitch:clips"    ? "TwitchClips"
+         : e == "twitch:vod"    ? "TwitchVod"
+         : e == "twitch:stream" ? "TwitchStream"
+                                : QString{};
 }
 MediaProvider mediaProvider(const QString &s) {
   if (validYoutube(s))
@@ -76,7 +98,8 @@ bool validMediaUrl(const QString &s, MediaProvider provider) {
     return h.endsWith(".ttvnw.net") || h.endsWith(".twitchcdn.net") ||
            h == "clips-media-assets2.twitch.tv" ||
            h == "clips-media-assets.twitch.tv" ||
-           h == "d1ndex63qxojbr.cloudfront.net";
+           h == "d1ndex63qxojbr.cloudfront.net" ||
+           h == "d2nvs31859zcd8.cloudfront.net";
   }
   return false;
 }
@@ -100,6 +123,169 @@ bool validTwitchLivePlaylist(const QByteArray &body) {
     }
   }
   return segment;
+}
+QByteArray normalizeTwitchVodPlaylist(const QByteArray &body,
+                                      const QString &base) {
+  if (body.size() > 1048576 || !validMediaUrl(base, MediaProvider::Twitch))
+    return {};
+  auto lines = body.split('\n');
+  if (lines.isEmpty() || lines.first().trimmed() != "#EXTM3U")
+    return {};
+  QUrl parent(base, QUrl::StrictMode);
+  auto resolve = [&](QByteArray raw, bool init) -> QByteArray {
+    if (raw.contains('\\') || raw.contains('"') || raw.contains('\r') ||
+        raw.contains('\n'))
+      return {};
+    QUrl part(QString::fromUtf8(raw), QUrl::StrictMode);
+    if (!part.isValid() || part.hasFragment() || raw.startsWith("//"))
+      return {};
+    auto u = parent.resolved(part);
+    auto absolute = QString::fromLatin1(u.toEncoded());
+    if (!validMediaUrl(absolute, MediaProvider::Twitch))
+      return {};
+    auto path = u.path().toLower();
+    if (!(path.endsWith(".mp4") || (!init && path.endsWith(".ts"))))
+      return {};
+    return absolute.toUtf8();
+  };
+  QByteArray result;
+  bool end = false, segment = false;
+  static const QRegularExpression map("^#EXT-X-MAP:URI=\"([^\"]+)\"$");
+  // Whitelist only the non-URI HLS tags used by finite Twitch media
+  // playlists; do not copy arbitrary extractor/server supplied directives.
+  const QList<QByteArray> tags{"#EXTM3U",
+                               "#EXT-X-VERSION",
+                               "#EXT-X-TARGETDURATION",
+                               "#EXT-X-MEDIA-SEQUENCE",
+                               "#EXT-X-PLAYLIST-TYPE",
+                               "#EXT-X-PROGRAM-DATE-TIME",
+                               "#EXT-X-DISCONTINUITY",
+                               "#EXT-X-DISCONTINUITY-SEQUENCE",
+                               "#EXTINF",
+                               "#EXT-X-TWITCH-ELAPSED-SECS",
+                               "#EXT-X-TWITCH-TOTAL-SECS",
+                               "#ID3-EQUIV-TDTG"};
+  for (auto line : lines) {
+    line = line.trimmed();
+    if (line.isEmpty())
+      continue;
+    if (end)
+      return {};
+    if (line == "#EXT-X-ENDLIST")
+      end = true;
+    else if (line.startsWith("#EXT-X-MAP:")) {
+      auto m = map.match(QString::fromUtf8(line));
+      if (!m.hasMatch())
+        return {};
+      auto uri = resolve(m.captured(1).toUtf8(), true);
+      if (uri.isEmpty())
+        return {};
+      line = "#EXT-X-MAP:URI=\"" + uri + "\"";
+    } else if (line.startsWith('#')) {
+      auto tag = line.split(':').first();
+      if (!tags.contains(tag) || line.contains("URI="))
+        return {};
+    } else {
+      line = resolve(line, false);
+      if (line.isEmpty())
+        return {};
+      segment = true;
+    }
+    result += line + '\n';
+    if (result.size() > 4 * 1024 * 1024)
+      return {};
+  }
+  return end && segment ? result : QByteArray{};
+}
+TwitchVodSlice sliceTwitchFmp4Playlist(const QByteArray &normalized,
+                                       qint64 targetMs) {
+  // Input is our already validated finite, absolute-URI playlist. Rebuild
+  // a minimal media playlist starting at the containing segment, retaining
+  // the initialization map and discontinuity state of each remaining segment.
+  struct Segment {
+    QByteArray info, uri, map;
+    qint64 start, ms;
+    bool discontinuity;
+  };
+  QList<Segment> segments;
+  QByteArray map, info;
+  qint64 sequence = 0, discontinuitySequence = 0, total = 0, maxMs = 0, ms = 0;
+  bool discontinuity = false, ended = false;
+  for (auto line : normalized.split('\n')) {
+    if (line.isEmpty())
+      continue;
+    if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:") ||
+        line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:")) {
+      bool ok = false;
+      auto n = line.mid(line.indexOf(':') + 1).toLongLong(&ok);
+      if (!ok || n < 0 || n > 1000000000)
+        return {};
+      if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:"))
+        sequence = n;
+      else
+        discontinuitySequence = n;
+    } else if (line.startsWith("#EXT-X-MAP:"))
+      map = line;
+    else if (line == "#EXT-X-DISCONTINUITY")
+      discontinuity = true;
+    else if (line.startsWith("#EXTINF:")) {
+      if (!info.isEmpty())
+        return {};
+      bool ok = false;
+      auto sec = line.mid(8).split(',').first().toDouble(&ok);
+      if (!ok || !std::isfinite(sec) || sec <= 0 || sec > 3600)
+        return {};
+      ms = std::llround(sec * 1000);
+      if (ms <= 0)
+        return {};
+      info = line;
+    } else if (line == "#EXT-X-ENDLIST")
+      ended = true;
+    else if (!line.startsWith('#')) {
+      if (ended || info.isEmpty() || map.isEmpty() ||
+          !QUrl(QString::fromUtf8(line))
+               .path()
+               .endsWith(".mp4", Qt::CaseInsensitive) ||
+          total + ms > 7LL * 24 * 3600 * 1000)
+        return {};
+      segments.append({info, line, map, total, ms, discontinuity});
+      total += ms;
+      maxMs = std::max(maxMs, ms);
+      info.clear();
+      discontinuity = false;
+    }
+  }
+  if (!ended || segments.isEmpty() || !info.isEmpty())
+    return {};
+  auto target = std::clamp<qint64>(targetMs, 0, total - 1);
+  int first = 0;
+  while (first + 1 < segments.size() && segments[first + 1].start <= target) {
+    if (segments[first].discontinuity)
+      ++discontinuitySequence;
+    ++first;
+  }
+  QByteArray output =
+      "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-"
+      "TARGETDURATION:" +
+      QByteArray::number((maxMs + 999) / 1000) +
+      "\n#EXT-X-MEDIA-SEQUENCE:" + QByteArray::number(sequence + first) +
+      "\n#EXT-X-DISCONTINUITY-SEQUENCE:" +
+      QByteArray::number(discontinuitySequence) + "\n";
+  QByteArray lastMap;
+  for (int i = first; i < segments.size(); ++i) {
+    auto &seg = segments[i];
+    if (seg.discontinuity)
+      output += "#EXT-X-DISCONTINUITY\n";
+    if (seg.map != lastMap) {
+      output += seg.map + '\n';
+      lastMap = seg.map;
+    }
+    output += seg.info + '\n' + seg.uri + '\n';
+  }
+  output += "#EXT-X-ENDLIST\n";
+  if (output.size() > 4 * 1024 * 1024)
+    return {};
+  return {output, segments[first].start, total};
 }
 static bool hls(const QJsonObject &o) {
   return o.value("protocol").toString().startsWith("m3u8");
@@ -136,7 +322,7 @@ Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
   if (provider == MediaProvider::Twitch) {
     auto key = o.value("extractor_key").toString();
     if ((key != "TwitchStream" || !m.live) &&
-        (key != "TwitchClips" || m.live)) {
+        (key != "TwitchClips" || m.live) && (key != "TwitchVod" || m.live)) {
       m.error = "Unsupported Twitch extractor response";
       return m;
     }
@@ -191,7 +377,9 @@ Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
       (!(hasTrack(f, "vcodec") && hasTrack(f, "acodec")) &&
        !twitchClipFormat(o, f, provider)) ||
       (provider == MediaProvider::Twitch &&
-       (m.live ? !hls(f) : f.value("protocol").toString() != "https"))) {
+       (o.value("extractor_key").toString() == "TwitchClips"
+            ? f.value("protocol").toString() != "https"
+            : !hls(f)))) {
     m.error = "No playable combined video/audio stream";
     return m;
   }

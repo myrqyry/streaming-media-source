@@ -417,3 +417,50 @@ README links passed. No production install/restart or push, PR #1 unchanged.
 Remaining: audio-only and Twitch VODs, richer user-requested live info if
 extractor exposes it, provider metadata refresh policy, native platform
 qualification. No continuous stats or extra Twitch API credentials.
+
+## Completed public Twitch VOD support
+Owner requested Twitch VODs. Added exact numeric canonical URL path,
+shared twitch:vod/TwitchVod extractor selection for playback and queue
+metadata, canonical duplicate detection and VOD labels. Public samples
+2928653119 (MPEG-TS, 33077.044s) and 2931942986 (fragmented MP4,
+33514.267s) resolved via pinned yt-dlp; both use the observed exact CDN
+d2nvs31859zcd8.cloudfront.net. Bounded finite HLS snapshots normalize
+relative media/init URIs against the validated final HTTPS response URL.
+Reject missing ENDLIST, foreign/local/non-HTTPS segments, nested playlists,
+encryption and unrecognized directives. No generic CloudFront widening.
+Private snapshot only, native OBS decoder streams the media on demand.
+
+Actual initial VOD tests revealed native OBS clock uses stream PTS
+(8502.448s TS, 62.044s fMP4 actual ffprobe start_time). Native zero-relative
+seek failed for both. VodClock captures first observed positive decoded
+PTS per epoch, rebases elapsed time and TS native seek/recovery targets.
+Sampled TS origin approximately 2s after true PTS origin; not frame-exact.
+TS near-end natural EOF works despite initial/reset native seek warning.
+fMP4 native seek scanned many segments and did not resume reliably.
+Implemented bounded segment index/slice using EXTINF, media sequence,
+initialization map and discontinuity state. fMP4 seeks re-resolve and reopen
+a private playlist at the containing segment; child native seek disabled.
+Full duration and segment timeline offset preserved. Manual seek requests
+epoch-tagged, processed on video tick, desired paused state carried across
+reopen. Recovery reuses same segment path; seek while remaining paused and
+interrupted-VOD recovery not independently real-qualified. Long uninterrupted
+timestamp-wrap playback not tested. Time query arguments stripped.
+Unsupported encrypted/ongoing/unusual HLS VODs rejected.
+
+RED/green parser, clock, slice and queue tests, all 9 CTest cases pass.
+Real isolated Linux OBS, fresh HOME/empty PATH, pinned runtime:
+- build/twitch-vod-indexed.log exit 0: public fMP4 1920x1080,
+  nonblack32/source audio52/mixed51, pause/seek/resume 1, 120000ms
+  segment start and time120368, near-end indexed 33500000ms start,
+  natural EOF position33514233 / duration33514267, metadata/current
+  thumbnail/queued VOD metadata and audio after automatic TS next all 1,
+  30791 dimension queries and source teardown.
+- build/twitch-vod-final-ts.log completed test: public TS 1920x1080,
+  nonblack31/source audio127/mixed127, pause/seek/resume 1, time121190,
+  natural EOF position33075024/duration33077044, VOD_INFO all 1,
+  auto advanced to fMP4 with audio; 23176 queries and source teardown.
+- build/twitch-vod-final-youtube.log final regression started after TS.
+  Check completion before claiming final YouTube network verification.
+README/CHANGELOG/AGENTS updated; no production install or restart, no push,
+cross-platform PR untouched. Remaining audio-only, offline waiting,
+live refresh, cross-platform playback and broader VOD qualification.

@@ -1,7 +1,7 @@
 # Streaming Media Source for OBS
 
 A standalone native OBS source for browser-free internet media playback. Paste a
-public YouTube video, Twitch live channel or Twitch clip URL into
+public YouTube video, Twitch live channel, clip or VOD URL into
 **Sources → Streaming Media**, or use the dock to import a public YouTube playlist.
 The original URL, not an expiring media URL, is stored in scene settings.
 Playback uses OBS's existing FFmpeg media engine; there is no browser,
@@ -118,13 +118,15 @@ decoder end or error preserves the queue and surfaces Retry, which resolves
 a fresh URL. Enable or disable automatic recovery in source properties
 (**Recover interrupted playback**, enabled by default).
 
-### Twitch channels and clips
+### Twitch channels, clips and VODs
 
 Paste a public channel URL (for example, `https://www.twitch.tv/lofigirl`)
-or a public clip URL into the same source or dock. Both the
+or a public clip or recording URL into the same source or dock. Both the
 `clips.twitch.tv/<slug>` and `www.twitch.tv/<channel>/clip/<slug>` forms
 are accepted. Channel names are case-normalized and clip aliases
-canonicalized. Play, Queue and opt-in WebSocket requests share the same
+canonicalized. Public completed recordings use
+`https://www.twitch.tv/videos/<numeric-id>`; time query parameters are
+currently discarded when canonicalizing the URL. Play, Queue and opt-in WebSocket requests share the same
 mixed-provider queue. A live channel does not auto-advance like a finite
 video; stop or choose the next item manually. Live seeking is disabled.
 Current Twitch and YouTube playback reuses extractor metadata: title,
@@ -144,8 +146,20 @@ snapshots, not live polling, and missing fields are omitted. Failed
 lookups fall back to URL labels; metadata is not persisted in scenes.
 An offline channel requires a later retry.
 
+Completed public Twitch VODs support HLS MPEG-TS and fragmented MP4.
+The resolver validates a bounded finite media playlist, resolves segment
+and initialization URLs against the validated CDN, and passes a private
+playlist snapshot to the native decoder. It does not download the recording.
+MPEG-TS uses native seeking with a sampled timestamp origin; fragmented
+MP4 uses indexed segment seeking, reopening the requested segment rather
+than scanning the recording. Segment-aligned seeks can land before the
+requested time and briefly reopen playback; the timeline is not frame-exact.
+Public VODs use the same queue, metadata, duration and natural-end auto
+advance as other finite media. Continuous playback across timestamp wraps,
+interrupted-VOD recovery and unusual HLS directives are not fully qualified.
+
 The original OBS source identifier is unchanged, so existing scenes
-continue to use the same source type. Twitch VODs, channel collections,
+continue to use the same source type. Twitch channel collections,
 authenticated content, automatic offline waiting and audio-only playback
 are not yet supported.
 
@@ -360,7 +374,12 @@ actual persisted queue order changes. For Twitch, set `SMOKE_TWITCH_LIVE=1` and 
 `SMOKE_TWITCH_CLIP=1` and pass a public clip URL. These modes check real
 video/audio, current title/author and thumbnail, metadata and thumbnail
 of a different queued Twitch item, continued mixer audio, stop and source
-teardown; the clip mode additionally exercises transport. Test logs from FFmpeg may contain
+teardown; the clip mode additionally exercises transport. Set
+`SMOKE_TWITCH_VOD=1` and supply a public completed VOD URL to test
+transport, queue metadata and an actual near-end seek and natural
+auto advance to a second public VOD. The two sampled recording IDs in
+the harness may expire; set `SMOKE_TWITCH_VOD_NEXT` to a different accessible
+public recording to replace the default next item. Test logs from FFmpeg may contain
 temporary signed media URLs; redact before sharing.
 
 ## Troubleshooting
@@ -389,7 +408,7 @@ supported. No browser-cookie import, login, proxy, token-provider integration
 or automatic circumvention of unavailable media. Use content you have
 permission to play or rebroadcast. YouTube extraction can change independently
 of the plugin. Current verified scope is public YouTube VOD, sampled public
-Twitch live channels/clips, native Linux OBS and software decoding; hardware decoding is an option but is not yet qualified.
+Twitch live channels/clips and completed VODs, native Linux OBS and software decoding; hardware decoding is an option but is not yet qualified.
 
 See ACTIVE_WORK.md for exact runtime evidence and remaining work.
 

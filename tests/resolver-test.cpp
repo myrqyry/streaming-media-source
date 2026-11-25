@@ -90,8 +90,8 @@ int main(int argc, char **argv) {
   check(mediaProvider("https://twitch.tv.evil.test/user") ==
             MediaProvider::Unknown,
         "Twitch host spoof");
-  check(mediaProvider("https://twitch.tv/videos/123") == MediaProvider::Unknown,
-        "VOD deferred");
+  check(mediaProvider("https://twitch.tv/videos/123") == MediaProvider::Twitch,
+        "Twitch VOD");
   check(mediaProvider("https://twitch.tv/directory") == MediaProvider::Unknown,
         "not a channel");
   check(!validMediaUrl("https://foo.ttvnw.net/video", MediaProvider::YouTube),
@@ -156,4 +156,68 @@ int main(int argc, char **argv) {
             "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://evil.test/"
             "key\"\nhttps://foo.ttvnw.net/seg.ts\n"),
         "key URI rejected");
+  check(canonicalTwitchUrl("https://m.twitch.tv/videos/123?t=2h") ==
+            "https://www.twitch.tv/videos/123",
+        "canonical VOD");
+  check(canonicalTwitchUrl("https://twitch.tv/videos/abc").isEmpty(),
+        "reject malformed VOD");
+  check(twitchExtractor("https://twitch.tv/videos/123") == "twitch:vod",
+        "VOD extractor");
+  QByteArray vod =
+      R"({"extractor_key":"TwitchVod","is_live":false,"formats":[{"url":"https://d2nvs31859zcd8.cloudfront.net/v/index.m3u8","protocol":"m3u8_native","vcodec":"avc1","acodec":"mp4a","height":720}]})";
+  auto vm = selectMedia(
+      vod, 1080, [](const QString &, bool h) { return h; },
+      MediaProvider::Twitch);
+  check(vm.error.isEmpty() && !vm.live && vm.hlsDirect,
+        "finite combined HLS VOD");
+  const QString base = "https://d2nvs31859zcd8.cloudfront.net/v/index.m3u8";
+  auto normalize = [&](QByteArray b) {
+    return normalizeTwitchVodPlaylist(b, base);
+  };
+  QByteArray playlist = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:5,\n0."
+                        "mp4\n#EXT-X-ENDLIST\n";
+  auto snapshot = normalize(playlist);
+  check(snapshot.contains("https://d2nvs31859zcd8.cloudfront.net/v/init.mp4") &&
+            snapshot.contains("https://d2nvs31859zcd8.cloudfront.net/v/0.mp4"),
+        "absolute init and media segments");
+  check(normalize("#EXTM3U\n#EXTINF:5,\n0.ts\n#EXT-X-ENDLIST\n")
+            .contains("/v/0.ts"),
+        "TS VOD");
+  check(normalize("#EXTM3U\n#EXTINF:5,\n0.ts\n").isEmpty(),
+        "require completed VOD");
+  for (auto path :
+       {"file:///tmp/private.ts", "https://evil.test/0.ts", "//evil.test/0.ts",
+        "http://d2nvs31859zcd8.cloudfront.net/0.ts", "nested.m3u8"}) {
+    check(normalize(QByteArray("#EXTM3U\n#EXTINF:5,\n") + path +
+                    "\n#EXT-X-ENDLIST\n")
+              .isEmpty(),
+          "reject unsafe VOD segment");
+  }
+  check(normalize("#EXTM3U\n#EXT-X-MAP:URI=\"file:///tmp/"
+                  "private.mp4\"\n#EXTINF:5,\n0.mp4\n#EXT-X-ENDLIST\n")
+            .isEmpty(),
+        "reject unsafe map");
+  check(normalize("#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\n#EXTINF:5,\n0."
+                  "ts\n#EXT-X-ENDLIST\n")
+            .isEmpty(),
+        "reject encryption");
+  auto fragmented =
+      normalize("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-"
+                "MAP:URI=\"init.mp4\"\n#EXTINF:5,\n0.mp4\n#EXTINF:6,\n1.mp4\n#"
+                "EXTINF:4,\n2.mp4\n#EXT-X-ENDLIST\n");
+  auto sliced = sliceTwitchFmp4Playlist(fragmented, 7000);
+  check(sliced.startMs == 5000 && sliced.durationMs == 15000,
+        "seek to containing segment");
+  check(sliced.manifest.contains("#EXT-X-MEDIA-SEQUENCE:11") &&
+            sliced.manifest.contains("/v/init.mp4") &&
+            !sliced.manifest.contains("/v/0.mp4") &&
+            sliced.manifest.contains("/v/1.mp4"),
+        "slice keeps init and remaining segments");
+  auto last = sliceTwitchFmp4Playlist(fragmented, 99999);
+  check(last.startMs == 11000 && last.manifest.contains("/v/2.mp4"),
+        "clamp to final segment");
+  check(sliceTwitchFmp4Playlist(
+            normalize("#EXTM3U\n#EXTINF:5,\n0.ts\n#EXT-X-ENDLIST\n"), 0)
+            .manifest.isEmpty(),
+        "only fragmented MP4");
 }

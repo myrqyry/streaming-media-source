@@ -92,6 +92,12 @@ struct Source {
   bool played = false, sessionLive = false;
   VodProgress progress;
   RecoveryPlan recovery;
+  VodClock vodClock;
+  std::atomic<bool> twitchVodClock{false};
+  std::atomic<bool> segmentVod{false}, segmentSeeking{false},
+      segmentPaused{false};
+  std::atomic<int64_t> segmentStart{0}, segmentDuration{0};
+  std::optional<std::pair<uint64_t, int64_t>> pendingSegmentSeek;
   std::atomic<bool> resumeGate{false};
   int64_t resumeTarget = 0, resumeDeadline = 0;
   bool resumeIssued = false;
@@ -192,12 +198,20 @@ struct Source {
     finished = false;
     finalDuration = 0;
     progress.reset();
+    twitchVodClock = false;
+    segmentVod = false;
+    segmentSeeking = false;
+    segmentPaused = false;
+    segmentStart = 0;
+    segmentDuration = 0;
+    vodClock.reset();
     lastDuration = 0;
     played = false;
     lastChildState = OBS_MEDIA_STATE_NONE;
     {
       std::lock_guard<std::mutex> l(mutex);
       pending.reset();
+      pendingSegmentSeek.reset();
       result.reset();
       title.clear();
       mediaInfo.clear();
@@ -205,10 +219,13 @@ struct Source {
     }
     clearChild();
   }
-  void queue(Request req, bool retry = false) {
+  void queue(Request req, bool retry = false, bool segmentManual = false) {
+    bool hold = segmentManual && segmentPaused.load();
     cancel(retry);
+    segmentSeeking = segmentManual;
+    segmentPaused = hold;
     resumeTarget = req.resumeMs;
-    resumeGate = resumeTarget > 0;
+    resumeGate = resumeTarget > 0 || segmentManual;
     if (req.url.isEmpty())
       return;
     if (canonicalMediaUrl(req.url).isEmpty()) {
@@ -251,9 +268,7 @@ struct Source {
     auto twitch = canonicalTwitchUrl(r.url);
     if (provider == MediaProvider::Twitch) {
       // Disable the generic/other-site extractors for this trusted route.
-      args << "--use-extractors"
-           << (twitch.startsWith("https://clips.twitch.tv/") ? "twitch:clips"
-                                                             : "twitch:stream");
+      args << "--use-extractors" << twitchExtractor(twitch);
     }
     args << "--" << (provider == MediaProvider::Twitch ? twitch : r.url);
     QProcess p;
@@ -292,6 +307,15 @@ struct Source {
       return m;
     }
     QHash<QString, QByteArray> snapshots;
+    bool twitchVod = twitchExtractor(twitch) == "twitch:vod";
+    if (provider == MediaProvider::Twitch &&
+        QJsonDocument::fromJson(output)
+                .object()
+                .value("extractor_key")
+                .toString() != twitchExtractorKey(twitch)) {
+      m.error = "Unexpected Twitch extractor";
+      return m;
+    }
     bool live =
         QJsonDocument::fromJson(output).object().value("is_live").toBool();
     auto selected = selectMedia(
@@ -300,13 +324,21 @@ struct Source {
           if (closing || epoch != r.id ||
               std::chrono::steady_clock::now() > deadline)
             return false;
+          QString effective;
           auto body = probeMediaHttps(
               url, hls, deadline, [&] { return closing || epoch != r.id; },
-              provider);
+              provider, &effective);
           if (!hls)
             return provider == MediaProvider::Twitch
                        ? body.size() >= 12 && body.mid(4, 4) == "ftyp"
                        : !body.isEmpty();
+          if (twitchVod) {
+            auto snapshot = normalizeTwitchVodPlaylist(body, effective);
+            if (snapshot.isEmpty())
+              return false;
+            snapshots.insert(url, snapshot);
+            return true;
+          }
           if (provider == MediaProvider::Twitch)
             return live && validTwitchLivePlaylist(body);
           if (live)
@@ -317,6 +349,23 @@ struct Source {
           return true;
         },
         provider);
+    if (twitchVod && selected.error.isEmpty()) {
+      auto snapshot = snapshots.value(selected.direct);
+      if (snapshot.contains("#EXT-X-MAP:")) {
+        auto slice = sliceTwitchFmp4Playlist(snapshot, r.resumeMs);
+        if (slice.manifest.isEmpty()) {
+          selected.error = "Unsupported fragmented MP4 playlist";
+          return selected;
+        }
+        snapshot = slice.manifest;
+        selected.segmentVod = true;
+        selected.segmentStartMs = slice.startMs;
+        selected.segmentDurationMs = slice.durationMs;
+      }
+      selected.manifest = QString::fromUtf8(snapshot);
+      if (selected.manifest.isEmpty())
+        selected.error = "No validated Twitch VOD playlist";
+    }
     if (!selected.live) {
       selected.videoPlaylist = snapshots.value(selected.videoUrl);
       selected.audioPlaylist = snapshots.value(selected.audioUrl);
@@ -482,13 +531,39 @@ struct Source {
       auto pos = obs_source_media_get_time(child),
            dur = obs_source_media_get_duration(child);
       bool endSignal = decoderEnded.exchange(false);
-      if (resumeGate && !endSignal && st == OBS_MEDIA_STATE_PLAYING &&
-          pos > 0 && dur > 0 && videoWidth > 0) {
+      if (twitchVodClock) {
+        if (!endSignal && st == OBS_MEDIA_STATE_PLAYING && videoWidth > 0 &&
+            vodClock.observe(pos))
+          blog(LOG_DEBUG, "[streaming-media] Twitch VOD timestamp origin: %lld",
+               (long long)pos);
+        pos = vodClock.position(pos);
+        if (segmentVod) {
+          if (vodClock.ready())
+            pos += segmentStart.load();
+          dur = segmentDuration.load();
+          if (vodClock.ready() && st == OBS_MEDIA_STATE_PLAYING &&
+              videoWidth > 0 && resumeGate && !endSignal) {
+            resumeGate = false;
+            resumeTarget = 0;
+            resumeIssued = false;
+            segmentSeeking = false;
+            blog(LOG_DEBUG, "[streaming-media] VOD segment start %lld",
+                 (long long)segmentStart.load());
+            if (segmentPaused)
+              obs_source_media_play_pause(child, true);
+          }
+        }
+      }
+      if (!segmentVod && resumeGate && !endSignal &&
+          st == OBS_MEDIA_STATE_PLAYING && pos > 0 && dur > 0 &&
+          videoWidth > 0) {
         if (!resumeIssued) {
           resumeTarget = std::clamp<int64_t>(resumeTarget, 0,
                                              std::max<int64_t>(0, dur - 1000));
           progress.seek(resumeTarget);
-          obs_source_media_set_time(child, resumeTarget);
+          obs_source_media_set_time(child, twitchVodClock
+                                               ? vodClock.target(resumeTarget)
+                                               : resumeTarget);
           resumeIssued = true;
           resumeDeadline = nowMs() + 18000;
         } else if (std::abs(pos - resumeTarget) <= 2000) {
@@ -638,6 +713,18 @@ struct Source {
       loading = false;
     }
     processQueue();
+    std::optional<std::pair<uint64_t, int64_t>> seekRequest;
+    Request seekReq;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      seekRequest = pendingSegmentSeek;
+      pendingSegmentSeek.reset();
+      seekReq = current;
+    }
+    if (seekRequest && seekRequest->first == epoch && segmentVod && accept) {
+      seekReq.resumeMs = seekRequest->second;
+      queue(seekReq, false, true);
+    }
     if (auto attempt = recovery.take(nowMs())) {
       Request req;
       {
@@ -718,18 +805,22 @@ struct Source {
     obs_data_set_string(settings, "input", qPrintable(input));
     auto twitch = mediaProvider(r->req.url) == MediaProvider::Twitch;
     obs_data_set_string(settings, "input_format",
-                        twitch && !r->media.live ? "mov"
+                        twitch && !r->media.hlsDirect ? "mov"
                         : r->media.manifest.isEmpty() && !r->media.hlsDirect
                             ? ""
                             : "hls");
     obs_data_set_string(settings, "ffmpeg_options",
                         mediaProvider(r->req.url) == MediaProvider::Twitch
-                            ? "protocol_whitelist=https,tcp,tls,crypto"
+                            ? (r->media.manifest.isEmpty()
+                                   ? "protocol_whitelist=https,tcp,tls,crypto"
+                                   : "protocol_whitelist=file,https,tcp,tls "
+                                     "allowed_extensions=ts,mp4,m3u8")
                         : r->media.manifest.isEmpty()
                             ? ""
                             : "protocol_whitelist=file,http,https,tcp,tls,"
                               "crypto allowed_extensions=ALL");
-    obs_data_set_bool(settings, "seekable", !r->media.live);
+    obs_data_set_bool(settings, "seekable",
+                      !r->media.live && !r->media.segmentVod);
     obs_data_set_bool(settings, "restart_on_activate", false);
     obs_data_set_bool(settings, "close_when_inactive", false);
     obs_data_set_bool(settings, "clear_on_media_end", true);
@@ -748,6 +839,10 @@ struct Source {
           QJsonDocument(r->media.info).toJson(QJsonDocument::Compact));
       error.clear();
     }
+    segmentVod = r->media.segmentVod;
+    segmentStart = r->media.segmentStartMs;
+    segmentDuration = r->media.segmentDurationMs;
+    twitchVodClock = twitchExtractor(r->req.url) == "twitch:vod";
     sessionLive = r->media.live;
     if (sessionLive) {
       resumeGate = false;
@@ -757,7 +852,9 @@ struct Source {
     failed = false;
     blog(LOG_INFO, "[streaming-media] Media resolved (%s, %s)",
          r->media.live ? "live" : "VOD",
-         r->media.manifest.isEmpty() ? "combined" : "adaptive HLS");
+         r->media.segmentVod           ? "indexed HLS"
+         : r->media.manifest.isEmpty() ? "combined"
+                                       : "HLS playlist");
   }
   void update(obs_data_t *d) {
     Request r;
@@ -920,19 +1017,37 @@ enum obs_media_state state(void *p) {
 }
 int64_t duration(void *p) {
   auto s = self(p);
-  return s->accept ? obs_source_media_get_duration(s->child)
-                   : s->finalDuration.load();
+  if (!s->accept)
+    return s->finalDuration.load();
+  return s->segmentVod ? s->segmentDuration.load()
+                       : obs_source_media_get_duration(s->child);
 }
 int64_t time(void *p) {
   auto s = self(p);
-  return s->accept ? obs_source_media_get_time(s->child)
-                   : s->finalDuration.load();
+  if (!s->accept)
+    return s->finalDuration.load();
+  auto raw = obs_source_media_get_time(s->child);
+  return s->twitchVodClock
+             ? s->vodClock.position(raw) + (s->segmentVod && s->vodClock.ready()
+                                                ? s->segmentStart.load()
+                                                : 0)
+             : raw;
 }
 void seek(void *p, int64_t ms) {
   auto s = self(p);
-  if (s->accept && !s->resumeGate) {
+  if (s->accept && !s->resumeGate &&
+      (!s->twitchVodClock || s->vodClock.ready())) {
+    if (s->segmentVod) {
+      std::lock_guard<std::mutex> lock(s->mutex);
+      s->pendingSegmentSeek = std::make_pair(
+          s->epoch.load(),
+          std::clamp<int64_t>(ms, 0,
+                              std::max<int64_t>(0, s->segmentDuration - 1)));
+      return;
+    }
     s->progress.seek(ms);
-    obs_source_media_set_time(s->child, ms);
+    obs_source_media_set_time(s->child,
+                              s->twitchVodClock ? s->vodClock.target(ms) : ms);
   }
 }
 void restart(void *p) { self(p)->reload(); }
@@ -940,6 +1055,10 @@ void stop(void *p) { self(p)->cancel(); }
 void next(void *p) { self(p)->enqueue({"next", {}, -1, -1}); }
 void pause(void *p, bool paused) {
   auto s = self(p);
+  if (s->segmentVod || s->segmentSeeking)
+    s->segmentPaused = paused;
+  if (s->segmentSeeking && (!s->accept || s->resumeGate))
+    return;
   if (s->accept && !s->resumeGate)
     obs_source_media_play_pause(s->child, paused);
   else if (!paused && !s->loading && !s->resumeGate)

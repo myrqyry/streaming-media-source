@@ -74,6 +74,16 @@ int main(int argc, char **argv) {
         "channel case identity");
   check(MediaQueue::fromJson(twitch.serialize()).items() == twitch.items(),
         "mixed provider persistence");
+  check(twitch.appendRequest("https://m.twitch.tv/videos/123?t=2h", {}, true) ==
+            "queued",
+        "VOD queue request");
+  check(twitch.appendRequest("https://www.twitch.tv/videos/123", {}, true) ==
+            "duplicate",
+        "VOD canonical duplicate");
+  check(twitch.items().last() == "https://www.twitch.tv/videos/123",
+        "canonical VOD persistence");
+  check(MediaQueue::fromJson(twitch.serialize()).items() == twitch.items(),
+        "mixed VOD queue roundtrip");
   VodProgress progress;
   progress.observe(626590);
   progress.observe(633000);

@@ -193,6 +193,7 @@ int main(int argc, char **argv) {
           (long long)obs_source_media_get_duration(s));
   const bool liveMode = qEnvironmentVariableIntValue("SMOKE_TWITCH_LIVE") != 0;
   const bool clipMode = qEnvironmentVariableIntValue("SMOKE_TWITCH_CLIP") != 0;
+  const bool vodMode = qEnvironmentVariableIntValue("SMOKE_TWITCH_VOD") != 0;
   bool pause = false, seek = false, resume = false;
   if (playing && !liveMode) {
     obs_source_media_play_pause(s, true);
@@ -204,7 +205,7 @@ int main(int argc, char **argv) {
     auto after = obs_source_media_get_time(s);
     pause = obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED &&
             std::abs(after - before) < 300;
-    auto target = clipMode ? 10000 : 45000;
+    auto target = vodMode ? 120000 : clipMode ? 10000 : 45000;
     obs_source_media_set_time(s, target);
     obs_source_media_play_pause(s, false);
     seek = until(18, [&] {
@@ -242,7 +243,7 @@ int main(int argc, char **argv) {
       widgetReady && until(8, [&] { return !thumb->pixmap().isNull(); });
   fprintf(stderr, "DOCK widgets=%d thumbnail=%d\n", widgetReady,
           thumbnailReady);
-  if (widgetReady && !liveMode && !clipMode)
+  if (widgetReady && !liveMode && !clipMode && !vodMode)
     dock->grab().save("build/dock-widget-preview.png");
   const bool recoveryMode = qEnvironmentVariableIntValue("SMOKE_RECOVERY") != 0;
   const bool importMode =
@@ -284,6 +285,54 @@ int main(int argc, char **argv) {
     fprintf(stderr,
             "TWITCH_MEDIA queue=%d continuing=%d stop=%d preserved=%d\n",
             appended, continued, stoppedLive, livePass);
+  }
+  bool vodPass = false;
+  if (vodMode && playing && pause && seek && resume && widgetReady) {
+    const QString defaultUpcoming =
+        QString::fromUtf8(argv[2]).endsWith("2928653119")
+            ? "https://www.twitch.tv/videos/2931942986"
+            : "https://www.twitch.tv/videos/2928653119";
+    const QString upcoming =
+        qEnvironmentVariable("SMOKE_TWITCH_VOD_NEXT", defaultUpcoming);
+    auto author = dock->findChild<QLabel *>("media-author");
+    auto durationLabel = dock->findChild<QLabel *>("media-queue-duration");
+    bool currentInfo = author && !author->text().isEmpty() &&
+                       title->toolTip().contains("Reported qualities");
+    entry->setText(upcoming);
+    add->click();
+    bool queuedVod =
+        until(3, [&] { return queued(s) == QStringList{upcoming}; });
+    bool queueInfo = until(25, [&] {
+      return rows->count() == 1 && !rows->item(0)->icon().isNull() &&
+             rows->item(0)->toolTip().contains("Channel:") && durationLabel &&
+             durationLabel->isVisible();
+    });
+    auto end = obs_source_media_get_duration(s);
+    queueCommand(s, "autoplay", "", -1, 1);
+    bool nearEnd = false, advanced = false, nextAudio = false;
+    if (end > 120000 && queuedVod) {
+      obs_source_media_set_time(s, end - 8000);
+      nearEnd = until(25, [&] {
+        auto t = obs_source_media_get_time(s);
+        return t >= end - 10000 && t < end;
+      });
+      advanced = until(
+          45, [&] { return currentUrl(s) == upcoming && queued(s).isEmpty(); });
+      auto n = mixed.load();
+      nextAudio =
+          advanced && until(45, [&] {
+            return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+                   obs_source_media_get_time(s) > 1000 &&
+                   obs_source_media_get_time(s) < 30000 && mixed > n + 15;
+          });
+    }
+    fprintf(stderr,
+            "VOD_INFO current=%d thumbnail=%d queued=%d metadata=%d "
+            "duration=%lld near_end=%d advanced=%d next_audio=%d\n",
+            currentInfo, thumbnailReady, queuedVod, queueInfo, (long long)end,
+            nearEnd, advanced, nextAudio);
+    vodPass = currentInfo && thumbnailReady && queuedVod && queueInfo &&
+              nearEnd && advanced && nextAudio;
   }
   bool importPass = false;
   bool recoveryPass = false;
@@ -416,8 +465,8 @@ int main(int argc, char **argv) {
             reconnect, resumed, cancelled, preserved, (long long)oldPos);
     recoveryPass = reconnect && resumed && cancelled && preserved;
   }
-  if (!liveMode && !clipMode && !importMode && !recoveryMode && playing &&
-      pause && seek && resume && widgetReady) {
+  if (!liveMode && !clipMode && !vodMode && !importMode && !recoveryMode &&
+      playing && pause && seek && resume && widgetReady) {
     const char *other = "https://youtu.be/aqz-KE-bpKQ";
     const char *third = "https://youtu.be/jNQXAC9IVRw";
     entry->setText(third);
@@ -552,13 +601,16 @@ int main(int argc, char **argv) {
   pump();
   obs_shutdown();
   return dimensionQueries > 100 && released && playing && widgetReady &&
-                 ((liveMode || clipMode)
-                      ? (livePass && (!clipMode || (pause && seek && resume)))
-                      : (pause && seek && resume &&
-                         (importMode     ? importPass
-                          : recoveryMode ? recoveryPass
-                                         : (queueEdit && nextPlayback &&
-                                            stopped && autoNext))))
+                 (vodMode
+                      ? vodPass
+                      : ((liveMode || clipMode)
+                             ? (livePass &&
+                                (!clipMode || (pause && seek && resume)))
+                             : (pause && seek && resume &&
+                                (importMode     ? importPass
+                                 : recoveryMode ? recoveryPass
+                                                : (queueEdit && nextPlayback &&
+                                                   stopped && autoNext)))))
              ? 0
              : 1;
 }

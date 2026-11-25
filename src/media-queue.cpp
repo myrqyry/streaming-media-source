@@ -38,8 +38,9 @@ QString mediaLabel(const QString &url) {
   if (canonical.isEmpty())
     return {};
   auto u = QUrl(canonical);
-  return u.host() == "clips.twitch.tv" ? "Twitch clip · " + u.path().mid(1)
-                                       : "Twitch · " + u.path().mid(1);
+  return u.host() == "clips.twitch.tv"     ? "Twitch clip · " + u.path().mid(1)
+         : u.path().startsWith("/videos/") ? "Twitch VOD · " + u.path().mid(8)
+                                           : "Twitch · " + u.path().mid(1);
 }
 bool MediaQueue::append(const QString &url) {
   if (urls.size() >= 100 || canonicalMediaUrl(url.trimmed()).isEmpty())

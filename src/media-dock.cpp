@@ -838,10 +838,7 @@ class MediaDock : public QWidget {
     p->setProgram(engine.extractor);
     p->setArguments({"--ignore-config", "--no-playlist", "--skip-download",
                      "--no-warnings", "--no-progress", "--socket-timeout", "8",
-                     "--retries", "0", "--use-extractors",
-                     key.startsWith("https://clips.twitch.tv/")
-                         ? "twitch:clips"
-                         : "twitch:stream",
+                     "--retries", "0", "--use-extractors", twitchExtractor(key),
                      "-J", "--", key});
     auto drain = [this, p] {
       if (metadataProcess != p)
@@ -866,9 +863,7 @@ class MediaDock : public QWidget {
         if (ok && !metadataOverflow) {
           auto doc = QJsonDocument::fromJson(metadataBytes);
           auto root = doc.object();
-          auto expected = key.startsWith("https://clips.twitch.tv/")
-                              ? "TwitchClips"
-                              : "TwitchStream";
+          auto expected = twitchExtractorKey(key);
           if (root.value("extractor_key").toString() == expected) {
             auto info = normalizedMediaInfo(root, MediaProvider::Twitch);
             cached->metadata.title = info.value("title").toString();
@@ -1113,8 +1108,7 @@ class MediaDock : public QWidget {
 
       state = obs_source_media_get_state(s.get());
       duration = obs_source_media_get_duration(s.get());
-      live = duration <= 0 &&
-             canonicalTwitchUrl(current).startsWith("https://www.twitch.tv/") &&
+      live = duration <= 0 && twitchExtractor(current) == "twitch:stream" &&
              (state == OBS_MEDIA_STATE_PLAYING ||
               state == OBS_MEDIA_STATE_PAUSED ||
               state == OBS_MEDIA_STATE_BUFFERING);
