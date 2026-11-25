@@ -36,3 +36,5 @@ public:
   void observe(qint64 ms);
   qint64 position() const { return high; }
 };
+
+bool validSourceMediaUrl(const QString &url, bool audioOnly);

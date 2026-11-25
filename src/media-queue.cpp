@@ -30,6 +30,13 @@ QString canonicalMediaUrl(const QString &url) {
     return "https://www.youtube.com/watch?v=" + id;
   return canonicalProviderUrl(url);
 }
+bool validSourceMediaUrl(const QString &url, bool audioOnly) {
+  if (canonicalMediaUrl(url).isEmpty())
+    return false;
+  auto p = mediaProvider(url);
+  return audioOnly ? p == MediaProvider::YouTube || audioOnlyProvider(p)
+                   : !audioOnlyProvider(p);
+}
 QString mediaLabel(const QString &url) {
   auto id = videoId(url);
   if (!id.isEmpty())
@@ -38,6 +45,10 @@ QString mediaLabel(const QString &url) {
   if (canonical.isEmpty())
     return {};
   auto u = QUrl(canonical);
+  if (mediaProvider(canonical) == MediaProvider::SoundCloud)
+    return "SoundCloud · " + u.path().mid(1);
+  if (mediaProvider(canonical) == MediaProvider::Bandcamp)
+    return "Bandcamp · " + u.path().mid(7);
   if (mediaProvider(canonical) == MediaProvider::Kick)
     return (providerExtractor(canonical) == "kick:live"   ? "Kick · "
             : providerExtractor(canonical) == "kick:clip" ? "Kick clip · "

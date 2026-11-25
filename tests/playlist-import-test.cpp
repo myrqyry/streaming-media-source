@@ -36,6 +36,52 @@ int main() {
   check(parseImportedPlaylist(R"({"entries":[{"id":"jNQXAC9IVRw"}]})")
             .entries.isEmpty(),
         "reject non-playlist response");
+  auto sc = QString(
+      "https://soundcloud.com/the-concept-band/sets/the-royal-concept-ep");
+  auto bc = QString("https://karlbmusic.bandcamp.com/album/land-of-the-pocket");
+  check(canonicalPlaylistUrl(sc, true) == sc &&
+            canonicalPlaylistUrl(bc, true) == bc,
+        "audio collection routes");
+  check(canonicalPlaylistUrl(sc).isEmpty() &&
+            canonicalPlaylistUrl(bc).isEmpty(),
+        "video source rejects audio collections");
+  check(canonicalPlaylistUrl(sc + "/s-private", true).isEmpty() &&
+            canonicalPlaylistUrl(sc + "?secret_token=s-private", true)
+                .isEmpty() &&
+            canonicalPlaylistUrl(
+                "https://artist.bandcamp.com.evil.test/album/x", true)
+                .isEmpty(),
+        "reject private and spoofed collections");
+  check(playlistExtractor(sc) == "soundcloud:set" &&
+            playlistExtractor(bc) == "bandcamp:album",
+        "exact collection extractor");
+  auto sound = parseImportedPlaylist(
+      R"({"_type":"playlist","extractor_key":"SoundcloudSet","playlist_count":4,"entries":[{"ie_key":"Soundcloud","url":"https://soundcloud.com/a/song","_type":"url_transparent"},{"ie_key":"Soundcloud","url":"https://soundcloud.com/a/other","availability":"private"},{"ie_key":"Bandcamp","url":"https://artist.bandcamp.com/track/x"},{"ie_key":"Soundcloud","url":"https://evil.test/a/song"}]})",
+      sc);
+  check(sound.entries.size() == 1 && sound.skipped == 3 &&
+            sound.entries[0].url == "https://soundcloud.com/a/song",
+        "SoundCloud flat entries are provider scoped");
+  auto band = parseImportedPlaylist(
+      R"({"_type":"playlist","extractor_key":"BandcampAlbum","entries":[{"ie_key":"Bandcamp","url":"https://karlbmusic.bandcamp.com/track/song","title":"Song"},{"ie_key":"Bandcamp","url":"https://evil.bandcamp.com/track/other","title":"Other"}]})",
+      bc);
+  check(band.entries.size() == 1 && band.entries[0].metadata.title == "Song" &&
+            band.entries[0].metadata.durationMs == -1,
+        "Bandcamp album accepts only same artist host");
+  check(
+      parseImportedPlaylist(
+          R"({"_type":"playlist","extractor_key":"BandcampAlbum","entries":[{"ie_key":"Soundcloud","url":"https://soundcloud.com/a/song"}]})",
+          sc)
+          .entries.isEmpty(),
+      "reject wrong root extractor");
+  MediaQueue music;
+  music.append("https://youtu.be/jNQXAC9IVRw");
+  auto mixed = applyPlaylistImport(
+      music, {sound.entries[0].url, band.entries[0].url}, true, true);
+  check(mixed.playUrl == sound.entries[0].url && mixed.added == 1 &&
+            music.items().first() == band.entries[0].url,
+        "audio import plays first and retains old queue");
+  check(applyPlaylistImport(music, {sound.entries[0].url}, false).added == 0,
+        "video import rejects audio provider");
   QStringList input{"https://youtu.be/jNQXAC9IVRw",
                     "https://youtu.be/BaW_jenozKc"};
   MediaQueue q;

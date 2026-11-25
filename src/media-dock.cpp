@@ -396,11 +396,13 @@ class MediaDock : public QWidget {
     auto p = new QProcess(this);
     importProcess = p;
     p->setProgram(engine.extractor);
+    auto extractor = playlistExtractor(link);
     p->setArguments({"--ignore-config", "--flat-playlist", "--playlist-end",
                      "101", "--dump-single-json", "--skip-download",
                      "--no-warnings", "--no-progress", "--socket-timeout", "10",
                      "--retries", "1", "--no-js-runtimes", "--js-runtimes",
-                     engine.engine + ":" + engine.js, "--", link});
+                     engine.engine + ":" + engine.js, "--use-extractors",
+                     extractor, "--", link});
     auto drain = [this, p] {
       if (importProcess != p)
         return;
@@ -418,7 +420,7 @@ class MediaDock : public QWidget {
                 cancelImport("Cannot start media engine");
             });
     connect(p, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [this, p, drain](int code, QProcess::ExitStatus exit) {
+            [this, p, drain, link](int code, QProcess::ExitStatus exit) {
               if (importProcess != p)
                 return;
               drain();
@@ -426,11 +428,11 @@ class MediaDock : public QWidget {
                 return;
               importProcess = nullptr;
               p->deleteLater();
-              auto data = parseImportedPlaylist(importBytes);
+              auto data = parseImportedPlaylist(importBytes, link);
               importBytes.clear();
               if (code != 0 || exit != QProcess::NormalExit ||
                   data.entries.isEmpty()) {
-                importMessage("No available playlist videos found");
+                importMessage("No available playlist entries found");
                 return;
               }
               auto s = sourceRef(importSource);
@@ -442,14 +444,22 @@ class MediaDock : public QWidget {
               QJsonArray urls;
               for (const auto &entry : data.entries) {
                 urls.append(entry.url);
-                auto id = videoId(entry.url);
+                auto id = cacheKey(entry.url);
                 auto cached = playlistCache.object(id);
                 if (!cached) {
                   cached = new CachedPlaylistItem;
                   playlistCache.insert(id, cached);
                 }
-                cached->metadata = entry.metadata;
-                cached->titleDone = !entry.metadata.title.isEmpty();
+                // Preserve richer metadata already obtained for a played or
+                // queued track.
+                if (!cached->titleDone) {
+                  cached->metadata = entry.metadata;
+                  cached->titleDone =
+                      !entry.metadata.title.isEmpty() &&
+                      (mediaProvider(entry.url) == MediaProvider::YouTube ||
+                       (entry.metadata.durationMs >= 0 &&
+                        !entry.metadata.author.isEmpty()));
+                }
               }
               importFound = data.entries.size();
               importTotal = data.total;
@@ -670,7 +680,11 @@ class MediaDock : public QWidget {
     auto value = url->text().trimmed();
     if (importProcess || !importReceipt.isEmpty())
       return;
-    auto playlist = canonicalPlaylistUrl(value);
+    auto selectedSource = selected();
+    bool audioSource =
+        selectedSource && QString::fromUtf8(obs_source_get_unversioned_id(
+                              selectedSource.get())) == "streaming_media_audio";
+    auto playlist = canonicalPlaylistUrl(value, audioSource);
     auto id = videoId(value);
     if (!playlist.isEmpty()) {
       bool entire = id.isEmpty();
@@ -688,10 +702,16 @@ class MediaDock : public QWidget {
       else
         action(immediate ? "load" : "append",
                "https://www.youtube.com/watch?v=" + id);
-    } else if (!canonicalMediaUrl(value).isEmpty()) {
+    } else if (auto chosenSource = selected();
+               chosenSource &&
+               validSourceMediaUrl(
+                   value,
+                   QString::fromUtf8(obs_source_get_unversioned_id(
+                       chosenSource.get())) == "streaming_media_audio")) {
       action(immediate ? "load" : "append", value);
     } else {
-      url->setToolTip("Enter a YouTube, Twitch or Kick media URL");
+      url->setToolTip(
+          "Enter a supported URL for the selected media or audio source");
       url->setFocus();
       return;
     }
@@ -703,8 +723,10 @@ class MediaDock : public QWidget {
     obs_enum_sources(
         [](void *param, obs_source_t *s) {
           if (!obs_source_removed(s) &&
-              QString::fromUtf8(obs_source_get_unversioned_id(s)) ==
-                  "streaming_media_youtube")
+              (QString::fromUtf8(obs_source_get_unversioned_id(s)) ==
+                   "streaming_media_youtube" ||
+               QString::fromUtf8(obs_source_get_unversioned_id(s)) ==
+                   "streaming_media_audio"))
             static_cast<QList<QPair<QString, QString>> *>(param)->append(
                 {QString::fromUtf8(obs_source_get_uuid(s)),
                  QString::fromUtf8(obs_source_get_name(s))});
@@ -854,11 +876,13 @@ class MediaDock : public QWidget {
                      ? cached->metadata.title
                      : mediaLabel(u);
     item->setText(title);
-    auto author = cached ? cached->metadata.author
-                  : mediaProvider(u) == MediaProvider::Twitch
-                      ? QString("Twitch")
-                  : mediaProvider(u) == MediaProvider::Kick ? QString("Kick")
-                                                            : QString{};
+    auto author =
+        cached                                      ? cached->metadata.author
+        : mediaProvider(u) == MediaProvider::Twitch ? QString("Twitch")
+        : mediaProvider(u) == MediaProvider::SoundCloud ? QString("SoundCloud")
+        : mediaProvider(u) == MediaProvider::Bandcamp   ? QString("Bandcamp")
+        : mediaProvider(u) == MediaProvider::Kick       ? QString("Kick")
+                                                        : QString{};
     if (cached && cached->metadata.durationMs >= 0) {
       if (!author.isEmpty())
         author += " · ";
@@ -979,8 +1003,8 @@ class MediaDock : public QWidget {
       auto original = item->data(UrlRole).toString();
       auto id = cacheKey(original);
       auto provider = mediaProvider(original);
-      bool twitch =
-          provider == MediaProvider::Twitch || provider == MediaProvider::Kick;
+      bool twitch = provider != MediaProvider::YouTube &&
+                    provider != MediaProvider::Unknown;
       if (id.isEmpty())
         continue;
       auto cached = playlistCache.object(id);

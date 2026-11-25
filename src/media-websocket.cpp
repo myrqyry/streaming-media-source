@@ -9,8 +9,10 @@ constexpr const char *vendorName = "streaming-media";
 using SourceRef = std::unique_ptr<obs_source_t, decltype(&obs_source_release)>;
 bool isMedia(obs_source_t *source) {
   return source && !obs_source_removed(source) &&
-         QString::fromUtf8(obs_source_get_unversioned_id(source)) ==
-             "streaming_media_youtube";
+         (QString::fromUtf8(obs_source_get_unversioned_id(source)) ==
+              "streaming_media_youtube" ||
+          QString::fromUtf8(obs_source_get_unversioned_id(source)) ==
+              "streaming_media_audio");
 }
 SourceRef target(obs_data_t *request) {
   auto uuid = obs_data_get_string(request, "sourceUuid");

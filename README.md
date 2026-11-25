@@ -1,6 +1,6 @@
 # Streaming Media Source for OBS
 
-A standalone native OBS source for browser-free internet media playback. Paste a
+Native OBS video and audio sources for browser-free internet media playback. Paste a
 public YouTube video, Twitch or Kick live channel, clip or VOD URL into
 **Sources → Streaming Media**, or use the dock to import a public YouTube playlist.
 The original URL, not an expiring media URL, is stored in scene settings.
@@ -16,6 +16,45 @@ desktop capture, listening port, or full-video download.
 > **Development preview (0.6.0).** Linux x86_64 and native OBS 32.2 are the current
 > locally exercised target. Public release packages are not available.
 > [Build checks](https://github.com/myrqyry/streaming-media-source/actions) · [Release readiness](RELEASE_CHECKLIST.md) · [Changelog](CHANGELOG.md)
+
+## Streaming Audio
+
+Add **Sources → Streaming Audio** for audio-only playback, and select that
+source in the existing Streaming Media dock. It shares the native OBS mixer,
+queue, transport controls, artwork, metadata and automatic advancement, but
+does not request video renditions or expose video resolution controls.
+
+| Provider | Supported input |
+| --- | --- |
+| YouTube | Public video URLs with dedicated HTTPS audio; YouTube playlist import |
+| SoundCloud | Public tracks with progressive MP3 or supported unencrypted AAC HLS; public set import |
+| Bandcamp | Public tracks with a standard MP3 streaming rendition; public album import |
+| Spotify | Not supported: no direct full-track audio stream is exposed by its official playback API |
+
+Audio extraction validates exact provider identity, HTTPS CDN hosts, dedicated
+audio formats and reachable renditions. It does not use cookies, download
+purchased albums, circumvent access restrictions or fall back to video decoding.
+Use Play to select the first imported entry and prepend the rest, or Queue
+to append without interrupting playback. Imports are bounded to 100 upcoming
+entries and preserve the existing queue. Unsupported URLs are skipped.
+Flat collection metadata may not reveal DRM, availability or audio format
+until a track is resolved for playback. Remove unplayable entries or select
+the next track manually; automatic skipping on resolution failure is not
+qualified. Live audio and additional CDN coverage remain future work.
+Only stream music for which you have the necessary rights.
+
+Real Linux OBS 32.2 smoke tests passed for YouTube, SoundCloud and Bandcamp,
+including mixed-provider automatic advancement, artwork, pause, seek, resume,
+mixer audio and zero rendered video frames. Cross-platform playback, OBS 33,
+audio recovery after interruption and live audio are not yet qualified.
+Real audio-source imports of an eleven-track Bandcamp album and a four-video
+YouTube playlist passed queueing, cancellation, metadata and first-track
+playback. SoundCloud set imports queued supported URL entries, but full
+collection playback and metadata tests did not pass. One sample began with a
+DRM-protected track. Another contained unsupported API-only track URLs.
+Unencrypted SoundCloud AAC HLS playback, indexed seeking, natural EOF and
+advancement to Bandcamp passed; the full smoke failed its artwork assertion.
+Remote requests in audio mode are not yet separately qualified.
 
 ## Requirements
 

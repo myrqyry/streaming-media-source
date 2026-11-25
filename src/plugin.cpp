@@ -71,6 +71,8 @@ static MediaRuntime runtime() {
 }
 struct Source {
   obs_source_t *parent = nullptr, *child = nullptr;
+  const bool audioOnly;
+  std::atomic<uint64_t> audioSeen{0};
   QTemporaryDir temp;
   std::atomic<bool> closing{false}, accept{false}, loading{false},
       failed{false}, finished{false};
@@ -122,7 +124,10 @@ struct Source {
   }
   int64_t lastDuration = 0;
   explicit Source(obs_source_t *s)
-      : parent(s), temp(QDir::tempPath() + "/obs-streaming-media-XXXXXX") {}
+      : parent(s),
+        audioOnly(QString::fromUtf8(obs_source_get_unversioned_id(s)) ==
+                  "streaming_media_audio"),
+        temp(QDir::tempPath() + "/obs-streaming-media-XXXXXX") {}
   ~Source() {
     accept = false;
     closing = true;
@@ -158,13 +163,15 @@ struct Source {
   static void audio(void *data, obs_source_t *, const struct audio_data *a,
                     bool muted) {
     auto s = static_cast<Source *>(data);
-    if (!s->accept || s->resumeGate || muted || !a->frames)
+    if (!s->accept || muted || !a->frames)
       return;
     obs_audio_info info{};
     if (!obs_get_audio_info(&info))
       return;
     auto gen = s->epoch.load();
-    if (s->accept && s->audioHandoff)
+    if (s->accept && s->audioOnly)
+      s->audioSeen = gen;
+    if (s->accept && !s->resumeGate && s->audioHandoff)
       s->audioHandoff->push(a->data, a->frames, a->timestamp,
                             info.samples_per_sec, info.speakers, gen);
   }
@@ -208,6 +215,7 @@ struct Source {
     decoderEnded = false;
     decoderUpdated = false;
     waitingDecoder = false;
+    audioSeen = 0;
     videoWidth = 0;
     videoHeight = 0;
     loading = false;
@@ -246,8 +254,10 @@ struct Source {
     resumeGate = resumeTarget > 0 || segmentManual;
     if (req.url.isEmpty())
       return;
-    if (canonicalMediaUrl(req.url).isEmpty()) {
-      fail("Use an HTTPS YouTube, Twitch or Kick video/channel URL");
+    if (!validSourceMediaUrl(req.url, audioOnly)) {
+      fail(audioOnly
+               ? "Use a public YouTube video, SoundCloud or Bandcamp track URL"
+               : "Use an HTTPS YouTube, Twitch or Kick video/channel URL");
       blog(LOG_WARNING, "[streaming-media] Use an HTTPS YouTube, Twitch or "
                         "Kick video/channel URL");
       return;
@@ -322,6 +332,38 @@ struct Source {
       m.error = "yt-dlp could not resolve this video; check extractor/runtime "
                 "availability";
       return m;
+    }
+    if (audioOnly) {
+      QHash<QString, TwitchVodSlice> slices;
+      auto selected = selectAudioMedia(
+          output,
+          [&](const QString &url, bool hls) {
+            if (closing || epoch != r.id ||
+                std::chrono::steady_clock::now() > deadline)
+              return false;
+            QString effective;
+            auto body = probeMediaHttps(
+                url, hls, deadline, [&] { return closing || epoch != r.id; },
+                provider, &effective);
+            if (!hls)
+              return !body.isEmpty();
+            auto normalized =
+                normalizeFinitePlaylist(body, effective, provider);
+            auto slice = sliceFinitePlaylist(normalized, r.resumeMs, false);
+            if (slice.manifest.isEmpty())
+              return false;
+            slices.insert(url, slice);
+            return true;
+          },
+          provider);
+      if (selected.error.isEmpty() && selected.hlsDirect) {
+        auto slice = slices.value(selected.direct);
+        selected.manifest = QString::fromUtf8(slice.manifest);
+        selected.segmentVod = true;
+        selected.segmentStartMs = slice.startMs;
+        selected.segmentDurationMs = slice.durationMs;
+      }
+      return selected;
     }
     QHash<QString, QByteArray> snapshots;
     bool finiteHls = providerExtractor(twitch) == "twitch:vod" ||
@@ -465,7 +507,7 @@ struct Source {
     QString status;
     if (!enabled)
       status = "disabled";
-    else if (url.size() > 2048 || canonicalMediaUrl(url).isEmpty())
+    else if (!validSourceMediaUrl(url, s->audioOnly))
       status = "invalid_url";
     else {
       std::lock_guard<std::mutex> l(s->mutex);
@@ -496,7 +538,7 @@ struct Source {
   static void importProc(void *data, calldata_t *call) {
     auto s = static_cast<Source *>(data);
     auto payload = QString::fromUtf8(calldata_string(call, "urls"));
-    if (payload.size() > 16384)
+    if (payload.size() > 65536)
       return;
     auto list = QJsonDocument::fromJson(payload.toUtf8());
     if (!list.isArray() || list.array().isEmpty() || list.array().size() > 101)
@@ -652,15 +694,17 @@ struct Source {
     }
     bool ended = false;
     if (accept) {
-      videoWidth = obs_source_get_base_width(child);
-      videoHeight = obs_source_get_base_height(child);
+      videoWidth = audioOnly ? 0 : obs_source_get_base_width(child);
+      videoHeight = audioOnly ? 0 : obs_source_get_base_height(child);
+      const bool mediaReady =
+          audioOnly ? audioSeen.load() == epoch.load() : videoWidth.load() > 0;
       auto st = obs_source_media_get_state(child);
       auto pos = obs_source_media_get_time(child),
            dur = obs_source_media_get_duration(child);
       dur = kickClipDuration(dur, kickClipReportedDuration.load());
       bool endSignal = decoderEnded.exchange(false);
       if (finiteHlsClock) {
-        if (!endSignal && st == OBS_MEDIA_STATE_PLAYING && videoWidth > 0 &&
+        if (!endSignal && st == OBS_MEDIA_STATE_PLAYING && mediaReady &&
             vodClock.observe(pos))
           blog(LOG_DEBUG, "[streaming-media] Finite HLS timestamp origin: %lld",
                (long long)pos);
@@ -669,8 +713,8 @@ struct Source {
           if (vodClock.ready())
             pos += segmentStart.load();
           dur = segmentDuration.load();
-          if (vodClock.ready() && st == OBS_MEDIA_STATE_PLAYING &&
-              videoWidth > 0 && resumeGate && !endSignal) {
+          if (vodClock.ready() && st == OBS_MEDIA_STATE_PLAYING && mediaReady &&
+              resumeGate && !endSignal) {
             resumeGate = false;
             resumeTarget = 0;
             resumeIssued = false;
@@ -683,8 +727,7 @@ struct Source {
         }
       }
       if (!segmentVod && resumeGate && !endSignal &&
-          st == OBS_MEDIA_STATE_PLAYING && pos > 0 && dur > 0 &&
-          videoWidth > 0) {
+          st == OBS_MEDIA_STATE_PLAYING && pos > 0 && dur > 0 && mediaReady) {
         if (!resumeIssued) {
           resumeTarget = std::clamp<int64_t>(resumeTarget, 0,
                                              std::max<int64_t>(0, dur - 1000));
@@ -711,7 +754,7 @@ struct Source {
           st != OBS_MEDIA_STATE_ERROR)
         progress.observe(pos);
       if (st == OBS_MEDIA_STATE_PLAYING && !resumeGate && !played && pos > 0 &&
-          videoWidth.load() > 0) {
+          mediaReady) {
         played = true;
         obs_source_media_started(parent);
       }
@@ -765,14 +808,18 @@ struct Source {
       };
       if (c.op == "remote_append")
         receipts.append(
-            {c.requestId, q.appendRequest(c.url, url, remoteEnabled)});
+            {c.requestId, validSourceMediaUrl(c.url, audioOnly)
+                              ? q.appendRequest(c.url, url, remoteEnabled)
+                              : "invalid_url"});
       else if (c.op == "import_append" || c.op == "import_play") {
         auto list = QJsonDocument::fromJson(c.url.toUtf8()).array();
         QStringList urls;
         for (auto entry : list)
-          if (entry.isString() && urls.size() < 101)
+          if (entry.isString() && urls.size() < 101 &&
+              validSourceMediaUrl(entry.toString(), audioOnly))
             urls.append(entry.toString());
-        auto imported = applyPlaylistImport(q, urls, c.op == "import_play");
+        auto imported =
+            applyPlaylistImport(q, urls, c.op == "import_play", audioOnly);
         if (!imported.playUrl.isEmpty()) {
           url = imported.playUrl;
           load = true;
@@ -782,7 +829,7 @@ struct Source {
             {c.requestId, QString("imported:%1:%2")
                               .arg(imported.added)
                               .arg(!imported.playUrl.isEmpty() ? 1 : 0)});
-      } else if (c.op == "append")
+      } else if (c.op == "append" && validSourceMediaUrl(c.url, audioOnly))
         q.append(c.url);
       else if (c.op == "remove" && matches())
         q.take(c.row);
@@ -792,7 +839,7 @@ struct Source {
         q = MediaQueue{};
       else if (c.op == "autoplay")
         autoAdvance = c.target != 0;
-      else if (c.op == "load" && !canonicalMediaUrl(c.url).isEmpty()) {
+      else if (c.op == "load" && validSourceMediaUrl(c.url, audioOnly)) {
         auto twitch = canonicalProviderUrl(c.url);
         url = twitch.isEmpty() ? c.url : twitch;
         load = true;
@@ -841,7 +888,8 @@ struct Source {
       loading = false;
     }
     processQueue();
-    capturePreview();
+    if (!audioOnly)
+      capturePreview();
     std::optional<std::pair<uint64_t, int64_t>> seekRequest;
     Request seekReq;
     {
@@ -934,12 +982,18 @@ struct Source {
     obs_data_set_string(settings, "input", qPrintable(input));
     auto twitch = mediaProvider(r->req.url) != MediaProvider::YouTube;
     obs_data_set_string(settings, "input_format",
-                        twitch && !r->media.hlsDirect ? "mov"
+                        audioOnly ? (r->media.hlsDirect ? "hls" : "")
+                        : twitch && !r->media.hlsDirect ? "mov"
                         : r->media.manifest.isEmpty() && !r->media.hlsDirect
                             ? ""
                             : "hls");
     obs_data_set_string(settings, "ffmpeg_options",
-                        mediaProvider(r->req.url) != MediaProvider::YouTube
+                        audioOnly
+                            ? (r->media.manifest.isEmpty()
+                                   ? "protocol_whitelist=https,tcp,tls"
+                                   : "protocol_whitelist=file,https,tcp,tls "
+                                     "allowed_extensions=mp4,m4s,m3u8")
+                        : mediaProvider(r->req.url) != MediaProvider::YouTube
                             ? (r->media.manifest.isEmpty()
                                    ? "protocol_whitelist=https,tcp,tls,crypto"
                                    : "protocol_whitelist=file,https,tcp,tls "
@@ -953,7 +1007,7 @@ struct Source {
     obs_data_set_bool(settings, "restart_on_activate", false);
     obs_data_set_bool(settings, "close_when_inactive", false);
     obs_data_set_bool(settings, "clear_on_media_end", true);
-    obs_data_set_bool(settings, "hw_decode", r->req.hw);
+    obs_data_set_bool(settings, "hw_decode", !audioOnly && r->req.hw);
     obs_data_set_bool(settings, "log_changes", false);
     obs_data_set_int(settings, "buffering_mb", r->req.buffer);
     obs_data_set_int(settings, "speed_percent", r->req.speed);
@@ -975,7 +1029,8 @@ struct Source {
     segmentVod = r->media.segmentVod;
     segmentStart = r->media.segmentStartMs;
     segmentDuration = r->media.segmentDurationMs;
-    finiteHlsClock = providerExtractor(r->req.url) == "twitch:vod" ||
+    finiteHlsClock = (audioOnly && r->media.segmentVod) ||
+                     providerExtractor(r->req.url) == "twitch:vod" ||
                      providerExtractor(r->req.url) == "kick:vod" ||
                      providerExtractor(r->req.url) == "kick:clip";
     sessionLive = r->media.live;
@@ -1025,6 +1080,7 @@ struct Source {
   }
 };
 const char *name(void *) { return "Streaming Media"; }
+const char *audioName(void *) { return "Streaming Audio"; }
 void defaults(obs_data_t *s) {
   obs_data_set_default_int(s, "height", 1080);
   obs_data_set_default_bool(s, "hw", true);
@@ -1057,6 +1113,12 @@ obs_properties_t *properties(void *) {
   obs_properties_add_bool(p, "auto_recover", "Recover interrupted playback");
   obs_properties_add_bool(p, "remote_requests",
                           "Accept WebSocket video requests");
+  return p;
+}
+obs_properties_t *audioProperties(void *data) {
+  auto p = properties(data);
+  obs_properties_remove_by_name(p, "height");
+  obs_properties_remove_by_name(p, "hw");
   return p;
 }
 void *create(obs_data_t *settings, obs_source_t *parent) {
@@ -1245,6 +1307,16 @@ bool obs_module_load(void) {
   i.media_next = next;
   i.media_play_pause = pause;
   i.icon_type = OBS_ICON_TYPE_MEDIA;
+  obs_register_source(&i);
+  i.id = "streaming_media_audio";
+  i.output_flags = OBS_SOURCE_AUDIO | OBS_SOURCE_CONTROLLABLE_MEDIA;
+  i.get_name = audioName;
+  i.get_properties = audioProperties;
+  i.video_render = nullptr;
+  i.get_width = nullptr;
+  i.get_height = nullptr;
+  i.video_get_color_space = nullptr;
+  i.icon_type = OBS_ICON_TYPE_AUDIO_OUTPUT;
   obs_register_source(&i);
   registerMediaDock(bundlePath(), managedPath());
   blog(LOG_INFO, "[streaming-media] Loaded 0.6.0");

@@ -15,7 +15,9 @@ struct ImportResult {
   QString playUrl;
   int added = 0;
 };
-QString canonicalPlaylistUrl(const QString &url);
-ImportedPlaylist parseImportedPlaylist(const QByteArray &json);
+QString canonicalPlaylistUrl(const QString &url, bool audioOnly = false);
+QString playlistExtractor(const QString &url);
+ImportedPlaylist parseImportedPlaylist(const QByteArray &json,
+                                       const QString &collection = {});
 ImportResult applyPlaylistImport(MediaQueue &queue, const QStringList &urls,
-                                 bool play);
+                                 bool play, bool audioOnly = false);
