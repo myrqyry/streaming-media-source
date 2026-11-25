@@ -713,3 +713,19 @@ in isolated TMPDIR. Does not prove TikTok natural EOF or mid-download
 cancellation, broader post coverage, Windows file-handle cleanup or
 crash cleanup. Owner requested clean handoff: docs updated, standalone
 test MP4s removed, logs retained, local commit. No install or push requested.
+
+## README organization and installation checkpoint
+Owner requested installation of 883d53a, then README cleanup. Installed the
+verified Linux module atomically into the existing OBS 32 plugin directory;
+previous binary preserved in build/installed-backups/20261124-223846-pre-tiktok.
+Installed SHA-256 82a95b5607c3b6c0128afb36b9e8d81f92971108439ad65d41c2a9582e809499;
+runtime 2026.11.23 retained; OBS was closed. All nine tests passed.
+Reorganized README into a user-facing overview with the mixed-provider
+matrix, quick start, collections, installation and qualification boundaries.
+Moved detailed instructions to docs/{build-install,providers,playback,
+websocket,architecture}.md, retaining the historical screenshot with its
+explicit older-build caption. Confirmed merged baseline a1a7f0d passed
+all eight OBS 32/33 hosted jobs (run 45542976014); newer TikTok branch
+has not run that matrix. Updated related CI/runtime/release notes.
+Checked relative file links, heading anchors and README link regression.
+Documentation-only local checkpoint; no further install or publication.

@@ -1,7 +1,7 @@
 # Set up the media engine
 
 Streaming Media Source uses two separate official executables: yt-dlp for
-YouTube, Twitch and Kick resolution and Deno for JavaScript execution. The module-only
+supported provider resolution and Deno for JavaScript execution. The module-only
 plugin does not redistribute either executable. No Python installation,
 administrator privileges, or PATH editing is needed for this setup.
 
@@ -18,9 +18,7 @@ Newer stable versions can be obtained from the official release pages.
 | macOS Apple Silicon (planned) | [yt-dlp_macos](https://github.com/yt-dlp/yt-dlp/releases/download/2026.11.23/yt-dlp_macos) | [macOS ARM64 ZIP](https://github.com/denoland/deno/releases/download/v2.9.8/deno-aarch64-apple-darwin.zip) |
 | macOS Intel (planned) | [yt-dlp_macos](https://github.com/yt-dlp/yt-dlp/releases/download/2026.11.23/yt-dlp_macos) | [macOS x64 ZIP](https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-apple-darwin.zip) |
 
-Windows and macOS OBS 32 native builds passed on the merged CI baseline;
-newer provider changes, OBS 33 builds and Windows/macOS playback still
-require qualification. Download links are not a production support claim.
+All eight OBS 32/33 native build/test/package jobs passed on the [merged video/audio baseline](https://github.com/myrqyry/streaming-media-source/actions/runs/45542976014). The newer TikTok changes and actual OBS 33/Windows/macOS playback still require qualification. Download links are not a production support claim.
 
 Official release pages:
 [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases) ·
