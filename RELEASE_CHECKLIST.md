@@ -52,3 +52,10 @@ Before a first public release:
 The repository was previously private and its existing history is now
 public. Review any historical development notes for sensitive information.
 No release binaries should be published until the remaining gates are met.
+
+- OBS 33.0.3: verify all eight OBS 32/33 matrix jobs on the current provider
+  branch, then exercise native module loading, real playback, queueing,
+  generated thumbnails, mixer audio and clean teardown on the intended
+  hosts. Validate modern install discovery and removal of duplicate legacy
+  copies. Keep binaries built against OBS 33 out of OBS 32 installations.
+  The SDK pins and layout verification alone do not establish compatibility.

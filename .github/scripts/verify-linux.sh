@@ -13,18 +13,31 @@ stage="$work/stage"
 test ! -e "$stage"
 test -s "$sdk/lib/cmake/libobs/libobsConfig.cmake"
 test -s "$sdk/lib/cmake/obs-frontend-api/obs-frontend-apiConfig.cmake"
+version="$(cat "$sdk/OBS_SDK_VERSION")"
+pins="$root/.github/scripts/obs-sdk-pins.json"
+pin_values="$(python3 - "$pins" "$version" <<'PIN'
+import json, sys
+with open(sys.argv[1]) as f:
+    pin = json.load(f)[sys.argv[2]]
+print(pin["websocket_revision"], pin["websocket_sha256"])
+PIN
+)"
+read -r rev digest <<< "$pin_values"
+case "$version" in
+  32.2.0) layout=legacy; module_dir=bin/64bit/; archive_version=obs32 ;;
+  33.0.3) layout=modern; module_dir=; archive_version=obs33 ;;
+  *) echo "Unsupported OBS SDK: $version" >&2; exit 1 ;;
+esac
 args=()
 if [[ "$module" == obs-streaming-media ]]; then
-  # OBS 32.2.0 records this obs-websocket gitlink. Source archives omit
+  # Each pinned OBS release records its own obs-websocket gitlink. Source archives omit
   # submodule contents; fetch and verify the exact public API header.
-  rev=1ef34bf48110c2a18184e50e41cd0b1a855e2147
-  digest=c29e8e38ee66c36db79cae86217ab0f270aad39f97e82090809d087c281b7948
   mkdir -p "$work/headers"
   header="$work/headers/obs-websocket-api.h"
   curl -fsSL --retry 3 "https://raw.githubusercontent.com/obsproject/obs-websocket/$rev/lib/obs-websocket-api.h" -o "$header"
   printf '%s  %s\n' "$digest" "$header" | sha256sum -c -
-  args+=("-DOBS_WEBSOCKET_INCLUDE_DIR=$work/headers" "-DSTREAMING_MEDIA_RUNTIME_DIR=")
-elif [[ "$module" != obs-ui-augment ]]; then
+  args+=("-DOBS_WEBSOCKET_INCLUDE_DIR=$work/headers" "-DSTREAMING_MEDIA_RUNTIME_DIR=" "-DSTREAMING_MEDIA_PACKAGE_LAYOUT=$layout")
+elif [[ "$module" != obs-ui-augment || "$version" != 32.2.0 ]]; then
   echo "Unsupported pilot module: $module" >&2
   exit 2
 fi
@@ -57,11 +70,11 @@ assert all(c.find("skipped") is None and c.find("failure") is None and
 print(f"Verified {len(cases)} test results")
 PY
 cmake --install "$build" --prefix "$stage/$module"
-binary="$stage/$module/bin/64bit/$module.so"
+binary="$stage/$module/${module_dir}$module.so"
 test -s "$binary"
 # Exact payload allowlist: native module and required project notices only; no configuration, source, bundled runtimes,
 # or build outputs accidentally enter this preliminary module-only package.
-expected="$module/bin/64bit/$module.so"
+expected="$module/${module_dir}$module.so"
 if [[ "$module" == obs-streaming-media ]]; then
   expected=$(printf '%s\n' "$expected" "$module/data/licenses/LICENSE" "$module/data/licenses/licensing.md" | LC_ALL=C sort)
   cmp "$root/LICENSE" "$stage/$module/data/licenses/LICENSE"
@@ -74,11 +87,11 @@ if readelf -d "$binary" | grep -E '(RPATH|RUNPATH)' ; then
 fi
 ldd "$binary" > "$work/dependencies.txt"
 if grep -F "not found" "$work/dependencies.txt"; then exit 1; fi
-tar -C "$stage" -czf "$work/$module-linux-x86_64-obs32-test.tar.gz" "$module"
-tar -tzf "$work/$module-linux-x86_64-obs32-test.tar.gz" > "$work/package-members.txt"
-grep -Fx "$module/bin/64bit/$module.so" "$work/package-members.txt"
-(cd "$work" && sha256sum "$module-linux-x86_64-obs32-test.tar.gz" > SHA256SUMS && sha256sum -c SHA256SUMS)
+tar -C "$stage" -czf "$work/$module-linux-x86_64-${archive_version}-test.tar.gz" "$module"
+tar -tzf "$work/$module-linux-x86_64-${archive_version}-test.tar.gz" > "$work/package-members.txt"
+grep -Fx "$module/${module_dir}$module.so" "$work/package-members.txt"
+(cd "$work" && sha256sum "$module-linux-x86_64-${archive_version}-test.tar.gz" > SHA256SUMS && sha256sum -c SHA256SUMS)
 mkdir "$work/extracted"
-tar -xzf "$work/$module-linux-x86_64-obs32-test.tar.gz" -C "$work/extracted"
-cmp "$binary" "$work/extracted/$module/bin/64bit/$module.so"
+tar -xzf "$work/$module-linux-x86_64-${archive_version}-test.tar.gz" -C "$work/extracted"
+cmp "$binary" "$work/extracted/$module/${module_dir}$module.so"
 echo "Native tests and local package validation passed; not a release."

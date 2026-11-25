@@ -5,6 +5,11 @@ published.
 
 ## Unreleased — Twitch and Kick providers
 
+- Version-pinned OBS 32.2.0/33.0.3 SDK matrix across Linux, Windows and
+  both macOS architectures, with version-specific packaging and SDK
+  patches. OBS 32 local regression and both package layouts verified;
+  actual OBS 33 native build/playback qualification pending.
+
 - Public Twitch live channels, clips and completed VODs, sharing the existing native
   decoder, mixer routing and mixed-provider queue.
 - Provider-specific URL/extractor and CDN validation, canonical Twitch

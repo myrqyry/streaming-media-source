@@ -20,7 +20,8 @@ desktop capture, listening port, or full-video download.
 ## Requirements
 
 - OBS Studio 32.x, native Linux installation (development/verification target:
-  OBS 32.2.0, libobs 32.0.1 headers, Qt 6.4.2).
+  OBS 32.2.0, libobs 32.0.1 headers, Qt 6.4.2). OBS 33.0.3 is a separate
+  qualification target; see the [OBS version compatibility guide](docs/ci.md#obs-32-and-33-compatibility).
 - The bundled Linux x86_64 package includes the standalone yt-dlp
   extractor and Deno JavaScript runtime. No separate Python, Node,
   yt-dlp, curl executable or PATH configuration is required.
@@ -29,6 +30,26 @@ desktop capture, listening port, or full-video download.
   existing NVM layout. The same Qt HTTPS rendition validation is used.
 - CMake and Qt6 Core/Widgets/Network and libobs/frontend API development
   headers for building.
+
+### OBS version and install layout
+
+Build against the SDK matching your OBS major version. OBS 33 requires a newer
+build environment (Ubuntu 26.04 with FFmpeg 8 or newer for Linux CI); do not
+replace system libraries on an OBS 32 workstation to build it. A module
+compiled against OBS 33 must not be installed in OBS 32.
+
+| Host | OBS 32 package | OBS 33 package |
+| --- | --- | --- |
+| Linux | `obs-streaming-media/bin/64bit/obs-streaming-media.so` under `$XDG_CONFIG_HOME/obs-studio/plugins` (default `~/.config`) | `obs-streaming-media/obs-streaming-media.so` under `$XDG_DATA_HOME/obs-studio/plugins` (default `~/.local/share`) |
+| Windows x64 | `obs-streaming-media/bin/64bit/obs-streaming-media.dll` | `obs-streaming-media/obs-streaming-media.dll` |
+| macOS | `obs-streaming-media.plugin` | `obs-streaming-media.plugin` |
+
+Windows per-plugin packages belong under `%ProgramData%/obs-studio/plugins`;
+macOS uses the standard OBS plugin bundle directory. Preserve the accompanying
+`data/` directory (bundle resources on macOS). Do not install both layouts
+for the same plugin at once. Close OBS before replacing an installation.
+OBS 33 packages and these paths are prepared for qualification, not a claim
+of verified playback. See [CI and package verification](docs/ci.md).
 
 ## Media engine setup
 
@@ -39,12 +60,12 @@ executables there, and refresh engine status.
 
 See the [runtime setup guide](docs/runtime-setup.md) for direct downloads,
 SHA-256 verification and step-by-step instructions. Linux x86_64 is the
-verified target; the Windows and macOS links are for planned builds.
+verified playback target; Windows and macOS runtime playback is not yet qualified.
 
 ## Install a local test package
 
 First generate the Linux x86_64 bundled archive using the [build and install](#build-and-install)
-instructions below. From the directory containing the archive and its checksum,
+instructions below (the example is for OBS 32). From the directory containing the archive and its checksum,
 verify the archive, close OBS, and extract it into the per-user plugins directory:
 
 ```sh
@@ -70,6 +91,13 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix "$HOME/.config/obs-studio/plugins/obs-streaming-media"
 ```
+
+The commands above target OBS 32. For an OBS 33 SDK, use a separate build
+directory, select `-DSTREAMING_MEDIA_PACKAGE_LAYOUT=modern` and stage under
+`"${XDG_DATA_HOME:-$HOME/.local/share}/obs-studio/plugins/obs-streaming-media"`.
+The default `auto` layout follows the detected libobs version; CI explicitly
+selects the corresponding layout. Verify the build against its intended
+host before installing.
 
 The bundle is installed under the module's own `data/runtime/` directory.
 It is preferred over system tools. For a source-only development build,
@@ -376,25 +404,24 @@ the child's own output mixer is disabled to avoid double routing.
 
 ## Verification
 
-The [Linux CI workflow](.github/workflows/ci.yml) uses a pinned OBS 32.2.0
-SDK and the matching obs-websocket API header. It runs the deterministic
-native CTest suite (at least nine tests, no skips), checks README links,
-and validates a Linux install archive containing only the module and project
-license notices, plus its checksum.
-The CI path deliberately does not download or bundle yt-dlp/Deno, run live
-YouTube playback, or upload release binaries.
+The [CI workflow](.github/workflows/ci.yml) covers two pinned SDK versions,
+OBS 32.2.0 and 33.0.3, across Linux x86_64, Windows x64, macOS Intel and
+macOS Apple Silicon. It checks deterministic regressions and module-only
+package contents and checksums. The matrix is a qualification mechanism,
+not a guarantee that every cell has passed. It does not bundle runtime
+executables, run live playback or publish releases.
 
 | Target | Verification boundary |
 | --- | --- |
 | Linux x86_64 / OBS 32.2 / Qt 6.4.2 | Local native tests, isolated real playback and bundled package smoke |
-| Ubuntu 24.04 / pinned OBS 32.2 SDK | Local and GitHub-hosted CI driver passed |
-| Windows x64, macOS Apple Silicon / Intel | Native SDK/build/test/package passed on merged baseline; current provider changes and live playback not yet qualified |
+| Ubuntu 24.04 / pinned OBS 32.2 SDK | Combined provider branch local Release build, nine tests and package gate passed |
+| Windows x64, macOS Apple Silicon / Intel / OBS 32.2 | [Merged CI baseline passed](https://github.com/myrqyry/streaming-media-source/actions/runs/45528453220); newer provider changes still need native CI and real playback |
+| OBS 33.0.3 / all four platforms | SDK pins and matrix configured; actual native build and playback qualification pending |
 | Flatpak, other OBS majors | Not qualified |
 
-The first hosted attempt was budget-blocked while the repository was private.
-After the owner made the repository public, the [retried hosted run](https://github.com/myrqyry/streaming-media-source/actions/runs/45412791743)
-completed successfully. See the [CI guide](docs/ci.md) for local reproduction. The optional real
-playback smoke below is deliberately separate from deterministic CI.
+See the [CI guide](docs/ci.md) for local reproduction and the [release
+checklist](RELEASE_CHECKLIST.md) for remaining gates. The optional real
+playback smoke below is separate from deterministic CI.
 
 
 ```sh
@@ -437,7 +464,7 @@ temporary signed media URLs; redact before sharing.
 
 | Symptom | First check |
 | --- | --- |
-| Source is missing | Confirm native OBS 32.x and the module under `plugins/obs-streaming-media/bin/64bit/`. Restart OBS after installation. |
+| Source is missing | Confirm the module was built for your OBS version and is in the corresponding [install layout](#obs-version-and-install-layout). Restart OBS after installation. |
 | Media engine missing | Follow the [runtime setup guide](docs/runtime-setup.md) or use a compatible existing system runtime. |
 | Video no longer resolves | Check for extractor updates in the dock, then retry. |
 | Update breaks resolution | Choose Use bundled extractor in the engine menu and retry. |

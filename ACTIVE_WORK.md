@@ -584,3 +584,16 @@ libraries, archive checksum and extracted module equality verified. No bundled
 runtime or local user artifacts in the test archive. Local qualification only;
 Windows/macOS qualification of this combined branch requires hosted CI. Public
 branch publication remains pending explicit owner intent per AGENTS.md.
+
+## OBS 33 dual-SDK qualification
+Added pinned OBS 33.0.3 alongside 32.2.0. Verified actual upstream
+source archive SHA and WebSocket revision/header SHA. Native dependency
+release 2026-10-23; upstream Windows boolean fix already present, exact
+macOS framework export patch still applicable. Eight-job matrix with
+Ubuntu 26.04 for OBS 33 and version-specific package layout (root module
+on Linux/Windows, same macOS bundle). RED/green seven verifier tests.
+Pinned OBS 32 Release regression and package gate 9/9 passed at
+build/obs32-regression.zDTVj8; modern layout staged with identical OBS32
+module bytes. No OBS33 compile or playback claim. Updated README, CI
+guide, runtime setup, changelog and release checklist. Owner explicitly
+authorized push; feature branch push triggers CI, no merge/release/install.

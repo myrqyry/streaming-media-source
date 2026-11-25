@@ -10,6 +10,50 @@ spec.loader.exec_module(native)
 
 
 class NativeTests(unittest.TestCase):
+    def test_obs33_pin_and_dependency_selection(self):
+        pin = native.sdk_pin("33.0.3")
+        self.assertEqual(pin["dependencies"], "2026-10-23")
+        self.assertEqual(pin["websocket_revision"], "e28f84975984340e84fc4879cfc05741cc0afde1")
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            native.sdk_pin("33.1.0")
+        with tempfile.TemporaryDirectory() as tmp:
+            obs = pathlib.Path(tmp)
+            root = obs / ".deps"
+            root.mkdir()
+            for arch in ("x64", "universal"):
+                for prefix in ("obs-deps", "obs-deps-qt6"):
+                    (root / f"{prefix}-2026-10-23-{arch}").mkdir()
+            for target, arch in (("windows-x64", "x64"), ("macos-arm64", "universal"),
+                                 ("macos-x86_64", "universal")):
+                self.assertEqual(native.dependency_dirs(obs, target, "33.0.3"),
+                    (root / f"obs-deps-2026-10-23-{arch}", root / f"obs-deps-qt6-2026-10-23-{arch}"))
+
+    def test_obs33_windows_does_not_apply_obsolete_patch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            obs = pathlib.Path(tmp)
+            (obs / "libobs").mkdir()
+            source = obs / "libobs/obs-properties.c"
+            corrected = b"return data->items.array[idx].b : false;"
+            source.write_bytes(corrected)
+            native.patch_obs_sdk(obs, "windows-x64", "33.0.3")
+            self.assertEqual(source.read_bytes(), corrected)
+            source.write_bytes(b"unexpected source")
+            with self.assertRaisesRegex(RuntimeError, "Unexpected"):
+                native.patch_obs_sdk(obs, "windows-x64", "33.0.3")
+            source.write_bytes(b"return data->items.array[idx].d : false;")
+            native.patch_obs_sdk(obs, "windows-x64", "32.2.0")
+            self.assertEqual(source.read_bytes(), corrected)
+
+    def test_version_specific_module_paths(self):
+        for target, extension in (("windows-x64", "dll"), ("linux-x86_64", "so")):
+            name = f"obs-streaming-media.{extension}"
+            self.assertEqual(native.module_relative_path(target, "32.2.0"),
+                pathlib.Path("obs-streaming-media/bin/64bit") / name)
+            self.assertEqual(native.module_relative_path(target, "33.0.3"),
+                pathlib.Path("obs-streaming-media") / name)
+        self.assertEqual(native.module_relative_path("macos-arm64", "33.0.3"),
+            pathlib.Path("obs-streaming-media.plugin/Contents/MacOS/obs-streaming-media"))
+
     def test_windows_selects_x64_not_x86(self):
         with tempfile.TemporaryDirectory() as tmp:
             obs = pathlib.Path(tmp)

@@ -11,7 +11,7 @@ versioned workflow only after the pilots qualify.
 
 1. Check common relative Markdown links and HTML image sources in README.
    These checks do not validate remote URLs or heading anchors.
-2. Download OBS 32.2.0 source and verify its pinned SHA-256 before
+2. Download the selected pinned OBS source and verify its pinned SHA-256 before
    building and installing the SDK into runner-local storage.
 3. Configure a clean Release build with explicit SDK CMake package paths.
 4. Require the native CTest suite to register at least the baseline number
@@ -21,7 +21,7 @@ versioned workflow only after the pilots qualify.
 6. Create a temporary archive, verify its SHA-256, extract it separately,
    and compare the extracted module to the staged module.
 
-The workflow runs on pull requests, pushes to main/master, and manual
+The workflow runs on pull requests, pushes to main/master and the qualification branches, and manual
 dispatch. It has read-only repository permissions and no automatic
 release or binary upload. The checksum is recorded in the run summary.
 A passing job establishes the tested Linux SDK/build/package path, not
@@ -37,8 +37,8 @@ exact CI SDK, use an empty temporary directory and run:
 
 Then run the project-specific verifier (see the workflow for the module
 name and baseline test count) against /tmp/plugin-obs32-sdk/sdk and a
-new empty work directory. You may instead pass a matching local SDK prefix
-such as /usr/local; that result qualifies the installed local SDK only.
+new empty work directory. The verifier requires an SDK prepared with the version marker
+`OBS_SDK_VERSION`; do not relabel an unrelated installed SDK.
 Keep the live OBS application and profile separate from build staging.
 
 ## Local qualification — 2026-11-24
@@ -62,7 +62,7 @@ private development notes, or third-party executables by default.
 
 The native qualification matrix adds Windows x64 (Visual Studio 2026),
 macOS Apple Silicon and macOS Intel (Xcode) to the existing Linux job.
-It uses the same checksum-pinned OBS 32.2.0 source archive and WebSocket
+It uses the selected checksum-pinned OBS source archive and WebSocket
 API header; OBS's own dependency bootstrap verifies the matching Qt and
 obs-deps archives specified in its CMakePresets.json.
 
@@ -85,7 +85,7 @@ uses an ad-hoc signature for test purposes, not Developer ID notarization.
 No yt-dlp or Deno executables, runtime dependency DLLs, or third-party
 frameworks are copied into these packages.
 
-The new jobs are qualification in progress, not a support announcement.
+The OBS 32.2.0 baseline passed all four hosted jobs in [run 45528453220](https://github.com/myrqyry/streaming-media-source/actions/runs/45528453220). Newer provider changes and OBS 33 remain in qualification, not a support announcement.
 Neither CI test archives nor release binaries are uploaded. Actual OBS
 load, playback, audio, playlist imports, and clean teardown on the target
 platforms remain necessary before claiming production support.
@@ -136,3 +136,55 @@ tests and four Python verifier tests passed. Hosted Windows qualification
 requires a successful rerun. The pinned Mac universal dependency choice
 is tested for both architectures; OBS/Qt dependencies are explicitly
 unpacked by role.
+
+## OBS 32 and 33 compatibility
+
+The shared pin file [obs-sdk-pins.json](../.github/scripts/obs-sdk-pins.json)
+records source SHA-256, obs-websocket submodule revision and header hash,
+and the dependency release for both versions.
+
+| Version | Linux runner | Native dependency release | Windows / Linux layout |
+| --- | --- | --- | --- |
+| 32.2.0 | Ubuntu 24.04 | 2026-07-15 | Legacy `bin/64bit/` |
+| 33.0.3 | Ubuntu 26.04 | 2026-10-23 | Module at plugin directory root |
+
+Both versions use the Visual Studio 2026 x64 runner and native Xcode
+runners for Apple Silicon and Intel. Mac packages remain plugin bundles.
+OBS 33 Linux requires FFmpeg 8 or newer. Use a matching isolated build
+environment; the developer's Linux Mint Qt 6.4 / FFmpeg 6 libraries are
+not an OBS 33 SDK.
+
+Linux reproduction, with the matching runner's dependencies installed:
+
+```sh
+bash .github/scripts/prepare-obs32-sdk.sh /tmp/plugin-obs33-sdk 33.0.3
+bash .github/scripts/verify-linux.sh /tmp/plugin-obs33-sdk/sdk /tmp/plugin-obs33-ci obs-streaming-media 9
+```
+
+The preparation script retains its historical filename and defaults to
+32.2.0 when no version is supplied. Native Windows/macOS reproduction:
+
+```sh
+python .github/scripts/verify-native.py /path/to/new-work-directory --obs-version 33.0.3
+```
+
+The OBS 32 Windows boolean-property correction is already present
+upstream in 33.0.3. The verifier checks that corrected source instead
+of applying the old patch. The exact macOS framework export correction
+remains applicable. Both were checked against the actual OBS 33 archive.
+
+CMake supports `STREAMING_MEDIA_PACKAGE_LAYOUT=auto|legacy|modern`.
+Automatic selection uses the detected libobs version; CI selects the
+expected layout explicitly and checks staged paths. The Linux OBS 33
+per-user install root is `$XDG_DATA_HOME/obs-studio/plugins`, defaulting
+to `~/.local/share/obs-studio/plugins`. Windows uses
+`%ProgramData%/obs-studio/plugins`. Preserve the stable module/source
+identity and never keep duplicate legacy and modern installations.
+
+The OBS 33 archive/header hashes and exact upstream patch targets were
+verified locally; the seven Python verifier tests and all nine C++
+regressions passed with the pinned OBS 32 SDK. Both legacy and modern
+package layouts were staged with identical module bytes using that SDK.
+That validates packaging, not OBS 33 binary compatibility. All actual
+OBS 33 native builds and runtime playback remain pending until tested.
+The full matrix covers eight jobs; no binaries are published by CI.
