@@ -1,3 +1,5 @@
+#include "media-queue.hpp"
+#include "playlist-metadata.hpp"
 #include "resolver.hpp"
 #include <QCoreApplication>
 #include <QDebug>
@@ -93,6 +95,82 @@ int main(int argc, char **argv) {
   check(normalizeFinitePlaylist(foreign, scHls, MediaProvider::SoundCloud)
             .isEmpty(),
         "foreign segment rejected");
+  const QString tt =
+      "https://www.tiktok.com/@creator.name/video/6742501081818877190";
+  check(canonicalProviderUrl("https://m.tiktok.com/@creator.name/video/"
+                             "6742501081818877190?share=1") == tt,
+        "canonical TikTok public post");
+  check(mediaProvider(tt) == MediaProvider::TikTok &&
+            providerExtractor(tt) == "tiktok" &&
+            providerExtractorKey(tt) == "TikTok" &&
+            validSourceMediaUrl(tt, false) && !validSourceMediaUrl(tt, true),
+        "TikTok is video only");
+  for (const auto &bad : QStringList{
+           "https://tiktok.com.evil.test/@creator/video/6742501081818877190",
+           "https://www.tiktok.com/@creator/live",
+           "https://www.tiktok.com/@creator/photo/6742501081818877190",
+           "https://vm.tiktok.com/abc",
+           "https://www.tiktok.com:444/@creator/video/6742501081818877190",
+           "https://user@www.tiktok.com/@creator/video/6742501081818877190"})
+    check(canonicalProviderUrl(bad).isEmpty(), "reject unsupported TikTok URL");
+  check(validMediaUrl("https://v16-webapp-prime.us.tiktok.com/stream",
+                      MediaProvider::TikTok) &&
+            !validMediaUrl(
+                "https://v16-webapp-prime.us.tiktok.com.evil.test/stream",
+                MediaProvider::TikTok) &&
+            !validMediaUrl("https://www.tiktok.com/stream",
+                           MediaProvider::TikTok),
+        "observed TikTok media hosts only");
+  check(validThumbnailUrl("https://p16-common-sign.tiktokcdn-us.com/image",
+                          MediaProvider::TikTok) &&
+            !validThumbnailUrl(
+                "https://p16-common-sign.tiktokcdn-us.com.evil.test/image",
+                MediaProvider::TikTok),
+        "TikTok artwork host");
+  QByteArray portrait =
+      R"({"extractor_key":"TikTok","title":"Portrait","formats":[
+    {"url":"https://v16-webapp-prime.us.tiktok.com/portrait","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"aac","width":576,"height":1024,"tbr":800},
+    {"url":"https://v19-webapp-prime.us.tiktok.com/denied","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"aac","width":576,"height":1024,"tbr":900},
+    {"url":"https://v16-webapp-prime.us.tiktok.com/drm","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"aac","width":576,"height":1024,"tbr":2000,"has_drm":true},
+    {"url":"https://v16-webapp-prime.us.tiktok.com/hevc","protocol":"https","ext":"mp4","vcodec":"h265","acodec":"aac","width":576,"height":1024,"tbr":2500},
+    {"url":"https://v16-webapp-prime.us.tiktok.com/silent","protocol":"https","ext":"mp4","vcodec":"h264","acodec":"none","width":576,"height":1024,"tbr":3000}]})";
+  QStringList attempted;
+  auto tiktok = selectMedia(
+      portrait, 720,
+      [&](const QString &url, bool hls) {
+        attempted << url;
+        return !hls && url.endsWith("/portrait");
+      },
+      MediaProvider::TikTok);
+  check(tiktok.error.isEmpty() && tiktok.direct.endsWith("/portrait") &&
+            attempted.size() == 2 && attempted.first().endsWith("/denied"),
+        "portrait short-edge quality cap and reachable combined H264/AAC "
+        "fallback");
+  check(!selectMedia(
+             portrait, 720, [](const QString &, bool) { return false; },
+             MediaProvider::TikTok)
+             .error.isEmpty(),
+        "deny unreachable TikTok media");
+  auto foreignRoot = portrait;
+  foreignRoot.replace("\"TikTok\"", "\"Generic\"");
+  check(!selectMedia(
+             foreignRoot, 720, [](const QString &, bool) { return true; },
+             MediaProvider::TikTok)
+             .error.isEmpty(),
+        "exact extractor identity");
+  auto protectedRoot = portrait;
+  protectedRoot.replace("\"extractor_key\":",
+                        "\"has_drm\":true,\"extractor_key\":");
+  check(!selectMedia(
+             protectedRoot, 720, [](const QString &, bool) { return true; },
+             MediaProvider::TikTok)
+             .error.isEmpty(),
+        "root DRM denied");
+  MediaQueue tiktokQueue;
+  check(tiktokQueue.append(tt + "?share=1") &&
+            tiktokQueue.items() == QStringList{tt} &&
+            mediaLabel(tt).startsWith("TikTok"),
+        "TikTok canonical queue and label");
   QByteArray good =
       R"({"requested_formats":[{"url":"https://manifest.googlevideo.com/v","protocol":"m3u8_native","vcodec":"avc1.64002A","acodec":"none","width":1920,"height":1080,"tbr":5000},{"url":"https://manifest.googlevideo.com/a","protocol":"m3u8_native","acodec":"mp4a.40.2","vcodec":"none"}],"title":"Test","is_live":false})";
   auto r = parseMedia(good);

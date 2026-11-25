@@ -257,9 +257,8 @@ struct Source {
     if (!validSourceMediaUrl(req.url, audioOnly)) {
       fail(audioOnly
                ? "Use a public YouTube video, SoundCloud or Bandcamp track URL"
-               : "Use an HTTPS YouTube, Twitch or Kick video/channel URL");
-      blog(LOG_WARNING, "[streaming-media] Use an HTTPS YouTube, Twitch or "
-                        "Kick video/channel URL");
+               : "Use an HTTPS YouTube, Twitch, Kick or TikTok video URL");
+      blog(LOG_WARNING, "[streaming-media] Unsupported source URL");
       return;
     }
     req.id = ++epoch;
@@ -394,7 +393,8 @@ struct Source {
               url, hls, deadline, [&] { return closing || epoch != r.id; },
               provider, &effective);
           if (!hls)
-            return provider == MediaProvider::Twitch
+            return (provider == MediaProvider::Twitch ||
+                    provider == MediaProvider::TikTok)
                        ? body.size() >= 12 && body.mid(4, 4) == "ftyp"
                        : !body.isEmpty();
           if (finiteHls) {
@@ -993,6 +993,8 @@ struct Source {
                                    ? "protocol_whitelist=https,tcp,tls"
                                    : "protocol_whitelist=file,https,tcp,tls "
                                      "allowed_extensions=mp4,m4s,m3u8")
+                        : mediaProvider(r->req.url) == MediaProvider::TikTok
+                            ? "protocol_whitelist=https,tcp,tls"
                         : mediaProvider(r->req.url) != MediaProvider::YouTube
                             ? (r->media.manifest.isEmpty()
                                    ? "protocol_whitelist=https,tcp,tls,crypto"

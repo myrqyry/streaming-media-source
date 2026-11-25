@@ -17,6 +17,23 @@ desktop capture, listening port, or full-video download.
 > locally exercised target. Public release packages are not available.
 > [Build checks](https://github.com/myrqyry/streaming-media-source/actions) · [Release readiness](RELEASE_CHECKLIST.md) · [Changelog](CHANGELOG.md)
 
+## Experimental TikTok video route
+
+This development branch recognizes full public TikTok post URLs
+(`https://www.tiktok.com/@creator/video/...`) in **Streaming Media** only.
+It selects combined H.264/AAC progressive MP4 with known dimensions on
+the two observed TikTok video hosts, using the shorter image edge for
+the resolution limit on portrait posts. No live channels, short-share
+redirects, photo posts, private posts, DRM or arbitrary CDN URLs.
+
+**Not yet qualified for playback.** The pinned extractor returned metadata
+and combined MP4 renditions for public samples, but media CDN requests
+returned HTTP 403 even with the extractor's own HTTP headers. The isolated
+OBS playback test failed with a controlled resolution error and no audio
+or video. No browser fallback, cookie access or access-control workaround
+is included. TikTok is not a supported provider until real playback,
+transport, metadata and queue advancement pass.
+
 ## Streaming Audio
 
 Add **Sources → Streaming Audio** for audio-only playback, and select that

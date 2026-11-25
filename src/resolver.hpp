@@ -8,7 +8,8 @@ enum class MediaProvider {
   Twitch,
   Kick,
   SoundCloud,
-  Bandcamp
+  Bandcamp,
+  TikTok
 };
 MediaProvider mediaProvider(const QString &url);
 QString canonicalKickUrl(const QString &url);

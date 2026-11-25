@@ -881,6 +881,7 @@ class MediaDock : public QWidget {
         : mediaProvider(u) == MediaProvider::Twitch ? QString("Twitch")
         : mediaProvider(u) == MediaProvider::SoundCloud ? QString("SoundCloud")
         : mediaProvider(u) == MediaProvider::Bandcamp   ? QString("Bandcamp")
+        : mediaProvider(u) == MediaProvider::TikTok     ? QString("TikTok")
         : mediaProvider(u) == MediaProvider::Kick       ? QString("Kick")
                                                         : QString{};
     if (cached && cached->metadata.durationMs >= 0) {

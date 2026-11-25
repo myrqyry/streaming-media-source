@@ -49,6 +49,8 @@ QString mediaLabel(const QString &url) {
     return "SoundCloud · " + u.path().mid(1);
   if (mediaProvider(canonical) == MediaProvider::Bandcamp)
     return "Bandcamp · " + u.path().mid(7);
+  if (mediaProvider(canonical) == MediaProvider::TikTok)
+    return "TikTok · " + u.path().section('/', 1, 1);
   if (mediaProvider(canonical) == MediaProvider::Kick)
     return (providerExtractor(canonical) == "kick:live"   ? "Kick · "
             : providerExtractor(canonical) == "kick:clip" ? "Kick clip · "

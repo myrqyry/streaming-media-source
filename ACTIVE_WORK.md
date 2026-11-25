@@ -663,3 +663,31 @@ build/installed-backups and retaining the existing runtime and data.
 Installed bytes matched the freshly checked build. OBS was not restarted.
 Final deterministic verification: 9/9 CTest, 7/7 native verifier tests and
 README links passed. New branch publication authorized by owner.
+
+## Experimental TikTok video route
+Owner requested TikTok in the video source. Local feature/tiktok-video
+from merged origin/master a1a7f0d (includes PRs #2 and #3).
+Pinned yt-dlp 2026.11.23 extracted several public test posts: TikTok exact
+key, combined H264/AAC HTTPS MP4, typically 576x1024, hosts
+v16-webapp-prime.us.tiktok.com / v19-webapp-prime.us.tiktok.com,
+thumbnail p16-common-sign.tiktokcdn-us.com. Other posts explicitly IP
+blocked or unavailable. All sampled media probes failed; patrox sample
+403 Akamai TCP_DENIED Access Denied even with full extractor HTTP headers,
+and bare ffprobe failed. Signed expire date 2026-11-27 04:18:19 UTC vs
+response 2026-11-25 04:17:53 UTC, so not an expired URL explanation.
+No signed URLs recorded, no bypass or credentials attempted.
+Experimental canonical public post route, exact extractor/CDN allowlist,
+combined known H264/AAC MP4 only, portrait short-edge cap, MP4 ftyp
+preflight, queue labels and thumbnail allowlist. Video source only.
+RED/green resolver coverage incl fallback, DRM, unsafe hosts, source
+isolation. 9/9 CTest passed. Real isolated OBS test
+build/tiktok-native-tiktok.log exit1: explicit no-reachable-MP4 error,
+width0 height0 frames0 source_audio0 mixed0 state7, source released.
+This is a verified failure path, NOT successful TikTok playback.
+YouTube regression build/tiktok-native-youtube.log exit0:
+1920x1080, source audio38/mixed40, controls and four-entry DOOM playlist
+cancel/import/playback all pass, source released.
+Blocker: accessible public TikTok media response for native HTTPS decoder.
+Next: test a reachable public full-post URL; verify actual video/audio,
+pause/seek, portrait preview, queue metadata/EOF/transition. Short links,
+live and photo posts intentionally out of scope. No install/push.
