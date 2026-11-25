@@ -573,3 +573,14 @@ feature branch rebuilt locally: 9/9 CTest, 4/4 Python verifier tests,
 minimal backend dock test and README link check pass. Native hosted
 qualification applies to merged baseline only, not the newer Twitch,
 Kick and generated preview changes. No feature push or install/restart.
+
+## Combined provider branch pinned-SDK packaging gate
+At f15a16d, ran the actual Linux CI driver against the pinned OBS 32.2.0 SDK in
+/tmp/obs-ci-pilots.Kk7s56/obs32/sdk using a fresh Release Ninja build.
+Evidence: build/provider-ci.2QKbza/verify.log, ctest.xml, SHA256SUMS.
+All nine CTest results passed, all four verifier Python tests passed, README
+links checked, exact module-and-notices payload, no RPATH/RUNPATH or unresolved
+libraries, archive checksum and extracted module equality verified. No bundled
+runtime or local user artifacts in the test archive. Local qualification only;
+Windows/macOS qualification of this combined branch requires hosted CI. Public
+branch publication remains pending explicit owner intent per AGENTS.md.
