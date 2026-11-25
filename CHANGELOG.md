@@ -11,8 +11,12 @@ published.
   channel/clip identities, bounded HTTPS preflight and live HLS checks.
 - Source name becomes Streaming Media; the persisted source ID is unchanged.
 - Verified isolated Linux OBS playback for a public live channel and clip.
-  Twitch VODs, thumbnails, offline polling and audio-only mode remain
-  future work.
+  Twitch VODs, offline polling and audio-only mode remain future work.
+- Reuse normalized extractor metadata for the current item and enrich
+  visible Twitch queue items with independent bounded lookups, including
+  thumbnails, channel/category, duration, optional counts and details.
+- Real live/clip cross-queue smoke tests confirmed current and queued
+  thumbnails and metadata while mixer audio continued.
 
 ## 0.6.0 — Playlist imports
 

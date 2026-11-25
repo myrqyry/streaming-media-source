@@ -238,8 +238,8 @@ int main(int argc, char **argv) {
                               !title->text().isEmpty() &&
                               title->text() != "No video loaded";
                      });
-  bool thumbnailReady = widgetReady && !liveMode &&
-                        until(8, [&] { return !thumb->pixmap().isNull(); });
+  bool thumbnailReady =
+      widgetReady && until(8, [&] { return !thumb->pixmap().isNull(); });
   fprintf(stderr, "DOCK widgets=%d thumbnail=%d\n", widgetReady,
           thumbnailReady);
   if (widgetReady && !liveMode && !clipMode)
@@ -249,19 +249,38 @@ int main(int argc, char **argv) {
       qEnvironmentVariableIntValue("SMOKE_PLAYLIST_IMPORT") != 0;
   bool livePass = false;
   if ((liveMode || clipMode) && playing && widgetReady) {
-    entry->setText("https://www.twitch.tv/lofigirl");
+    const QString upcoming = liveMode
+                                 ? "https://clips.twitch.tv/"
+                                   "HyperWimpyCourgetteLitty-FgZ8Z7UWKlWBjo2e"
+                                 : "https://www.twitch.tv/lofigirl";
+    auto author = dock->findChild<QLabel *>("media-author");
+    bool currentInfo =
+        author && author->text().contains("LofiGirl", Qt::CaseInsensitive) &&
+        title->toolTip().contains("Reported qualities");
+    entry->setText(upcoming);
     add->click();
-    bool appended = until(3, [&] {
-      return queued(s) == QStringList{"https://www.twitch.tv/lofigirl"};
-    });
+    bool appended =
+        until(3, [&] { return queued(s) == QStringList{upcoming}; });
     auto count = mixed.load();
-    bool continued = until(8, [&] { return mixed > count + 15; });
+    bool queueInfo = until(22, [&] {
+      return rows->count() == 1 && !rows->item(0)->icon().isNull() &&
+             rows->item(0)->toolTip().contains("Channel: LofiGirl") &&
+             (clipMode || rows->item(0)->toolTip().contains("Category: Music"));
+    });
+    bool continued =
+        mixed > count + 15 || until(8, [&] { return mixed > count + 15; });
+    fprintf(stderr,
+            "MEDIA_INFO current=%d thumbnail=%d queue=%d continuing=%d\n",
+            currentInfo, thumbnailReady, queueInfo, continued);
+    if (currentInfo && thumbnailReady && queueInfo)
+      dock->grab().save(liveMode ? "build/twitch-live-info.png"
+                                 : "build/twitch-clip-info.png");
     obs_source_media_stop(s);
     bool stoppedLive = until(5, [&] {
       return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
     });
-    livePass = appended && continued && stoppedLive &&
-               queued(s) == QStringList{"https://www.twitch.tv/lofigirl"};
+    livePass = currentInfo && thumbnailReady && queueInfo && appended &&
+               continued && stoppedLive && queued(s) == QStringList{upcoming};
     fprintf(stderr,
             "TWITCH_MEDIA queue=%d continuing=%d stop=%d preserved=%d\n",
             appended, continued, stoppedLive, livePass);

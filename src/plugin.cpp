@@ -84,7 +84,7 @@ struct Source {
   std::optional<Request> pending;
   std::optional<Result> result;
   std::thread worker;
-  QString title, error;
+  QString title, error, mediaInfo;
   std::deque<QueueCommand> commands;
   QHash<QString, QString> requestResults;
   QStringList requestOrder;
@@ -200,6 +200,7 @@ struct Source {
       pending.reset();
       result.reset();
       title.clear();
+      mediaInfo.clear();
       error.clear();
     }
     clearChild();
@@ -461,6 +462,11 @@ struct Source {
     calldata_set_string(call, "error", qPrintable(s->error));
     calldata_set_int(call, "width", s->videoWidth.load());
     calldata_set_int(call, "height", s->videoHeight.load());
+  }
+  static void infoProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex);
+    calldata_set_string(call, "json", qPrintable(s->mediaInfo));
   }
   void processQueue() {
     std::deque<QueueCommand> local;
@@ -738,6 +744,8 @@ struct Source {
     {
       std::lock_guard<std::mutex> l(mutex);
       title = r->media.title;
+      mediaInfo = QString::fromUtf8(
+          QJsonDocument(r->media.info).toJson(QJsonDocument::Compact));
       error.clear();
     }
     sessionLive = r->media.live;
@@ -855,6 +863,8 @@ void *create(obs_data_t *settings, obs_source_t *parent) {
                    "void streaming_media_status(out string title, out string "
                    "error, out int width, out int height)",
                    Source::statusProc, s);
+  proc_handler_add(proc, "void streaming_media_info(out string json)",
+                   Source::infoProc, s);
   proc_handler_add(proc,
                    "void streaming_media_submit(string url, out string "
                    "requestId, out string status)",

@@ -381,3 +381,39 @@ No production install, restart, merge or push. Native CI PR unchanged.
 Retain this feature branch until native CI is integrated; then reconcile
 and qualify Windows/macOS Twitch paths. Real live long-session and recovery
 remain unverified; no claims about ad removal or broadcast rights.
+
+## Provider metadata enrichment
+Owner requested pulling as much useful information as available. Context7
+yt-dlp official README/CONTRIBUTING fields consulted (/yt-dlp/yt-dlp);
+verified actual pinned runtime responses for live Twitch, clip and YouTube.
+Optional fields are omitted, not fabricated; no raw format JSON propagated.
+Normalized metadata (bounded plain text, author vs uploader, description,
+category, date, counts, duration, reported resolution list and validated
+thumbnail) travels through a separate read-only source info procedure.
+Current item reuses playback extraction; no duplicate extraction required.
+Dock displays compact author/category with escaped tooltip details. Twitch
+image host exact static-cdn.jtvnw.net, HTTPS/default port/no credentials,
+no redirects, 1 MiB and bounded JPEG/PNG/WebP dimensions. Visible Twitch
+queue rows use one metadata-only QProcess at a time, exact extractor,
+20s timeout, 4 MiB stdout, no media download, cancelled on source change
+or shutdown. Cache keyed by canonical provider URL (existing YouTube IDs
+retained), session-only; current metadata also populates matching rows.
+YouTube queue oEmbed path retained. Live counts/preview are snapshots,
+not periodic polling. Offline/missing fields fall back to labels; failed
+lookup not automatically retried until cache eviction/session change.
+RED missing metadata API; GREEN 9/9 CTest. Actual isolated Linux OBS
+with empty PATH and fresh HOME:
+- build/info-live.log exit 0, 1920x1080, nonblack16/audio25/mixed23,
+  current author/details, current thumbnail, queued clip metadata and
+  thumbnail, uninterrupted audio, queue/stop/preservation all 1;
+  9835 dimension queries. Screenshot build/twitch-live-info.png.
+- build/info-clip.log exit 0, 1080x1920, nonblack29/audio44/mixed46,
+  pause/seek/resume 1; current/thumbnail/queued live metadata/continuing
+  all 1; 15864 queries. Screenshot build/twitch-clip-info.png.
+- build/info-youtube-regression.log exit 0, 1920x1080,
+  nonblack26/audio39/mixed40, transport all 1, playlist cancel/import99,
+  no playback interruption, metadata/first play all 1, 28898 queries.
+README links passed. No production install/restart or push, PR #1 unchanged.
+Remaining: audio-only and Twitch VODs, richer user-requested live info if
+extractor exposes it, provider metadata refresh policy, native platform
+qualification. No continuous stats or extra Twitch API credentials.

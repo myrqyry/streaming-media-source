@@ -1,4 +1,5 @@
 #include "resolver.hpp"
+#include "playlist-metadata.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -128,7 +129,8 @@ Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
     return m;
   }
   auto o = j.object();
-  m.title = o.value("title").toString();
+  m.info = normalizedMediaInfo(o, provider);
+  m.title = m.info.value("title").toString();
   m.live = o.value("is_live").toBool();
   auto tracks = o.value("requested_formats").toArray();
   if (provider == MediaProvider::Twitch) {

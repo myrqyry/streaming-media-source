@@ -1,5 +1,6 @@
 #pragma once
 #include <QByteArray>
+#include <QJsonObject>
 #include <QString>
 enum class MediaProvider { Unknown, YouTube, Twitch };
 MediaProvider mediaProvider(const QString &url);
@@ -8,6 +9,7 @@ bool validTwitchLivePlaylist(const QByteArray &body);
 struct Media {
   QString title, direct, manifest, error, videoUrl, audioUrl;
   QByteArray videoPlaylist, audioPlaylist;
+  QJsonObject info;
   bool live = false;
   bool hlsDirect = false;
 };

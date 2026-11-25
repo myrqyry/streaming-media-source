@@ -127,8 +127,22 @@ are accepted. Channel names are case-normalized and clip aliases
 canonicalized. Play, Queue and opt-in WebSocket requests share the same
 mixed-provider queue. A live channel does not auto-advance like a finite
 video; stop or choose the next item manually. Live seeking is disabled.
-Twitch titles resolve at playback time; Twitch thumbnail and prefetch
-metadata are not implemented. An offline channel requires a later retry.
+Current Twitch and YouTube playback reuses extractor metadata: title,
+channel, category, description, publication date, reported resolutions,
+and available views, concurrent viewers, likes, follower and comment
+counts. Clip uploader is distinguished from channel. The dock shows a
+compact channel/category line and escaped detail tooltips. Twitch
+thumbnails load from the observed Twitch CDN with HTTPS-only requests,
+no redirects, bounded size and image dimensions.
+
+Visible Twitch queue entries are enriched one at a time by an independent
+metadata-only yt-dlp process with a 20-second timeout and 4 MiB response
+limit; this never downloads the media file or changes playback. YouTube
+queue rows retain their lightweight oEmbed/thumbnail path. Previously
+resolved items reuse session metadata. Counts are extraction-time
+snapshots, not live polling, and missing fields are omitted. Failed
+lookups fall back to URL labels; metadata is not persisted in scenes.
+An offline channel requires a later retry.
 
 The original OBS source identifier is unchanged, so existing scenes
 continue to use the same source type. Twitch VODs, channel collections,
@@ -344,8 +358,9 @@ real X11 drag-reorder test in the normal playback smoke (requires Python
 Xlib). It validates that public titles and thumbnails load and that the
 actual persisted queue order changes. For Twitch, set `SMOKE_TWITCH_LIVE=1` and pass a live channel URL, or
 `SMOKE_TWITCH_CLIP=1` and pass a public clip URL. These modes check real
-video/audio, dock queue insertion, stop and source teardown; the clip
-mode additionally exercises transport. Test logs from FFmpeg may contain
+video/audio, current title/author and thumbnail, metadata and thumbnail
+of a different queued Twitch item, continued mixer audio, stop and source
+teardown; the clip mode additionally exercises transport. Test logs from FFmpeg may contain
 temporary signed media URLs; redact before sharing.
 
 ## Troubleshooting
