@@ -3,7 +3,7 @@ name: Build and test
 on:
   pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, ci/native-platforms]
   workflow_dispatch:
 
 permissions:
@@ -24,6 +24,7 @@ jobs:
           persist-credentials: false
       - name: Check README links
         run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test-verify-native.py
           python3 .github/scripts/test-readme-links.py
           python3 .github/scripts/check_readme_links.py README.md
       - name: Install native build dependencies
@@ -46,3 +47,26 @@ jobs:
         run: |
           echo '### Verified local test archive (not uploaded)' >> "$GITHUB_STEP_SUMMARY"
           cat "$RUNNER_TEMP/plugin-ci/SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"
+
+  native:
+    name: ${{ matrix.label }} · OBS 32.2.0
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            runner: windows-2025-vs2026
+          - label: macOS Apple Silicon
+            runner: macos-26
+          - label: macOS Intel
+            runner: macos-26-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Native SDK, build, test and package
+        shell: bash
+
+        run: python .github/scripts/verify-native.py "$RUNNER_TEMP/native-ci"

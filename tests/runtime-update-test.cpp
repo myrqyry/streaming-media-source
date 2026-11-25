@@ -38,6 +38,9 @@ int main(int argc, char **argv) {
   check(!runtimeDownloadUrl(QUrl("https://github.com.evil.invalid/x")),
         "redirect host boundary");
   check(!runtimeDownloadUrl(QUrl("http://github.com/x")), "TLS only");
+  // The managed updater is a Linux x86_64 feature. The release parser and
+  // trust-boundary checks above still run on every platform.
+#if defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
   QTemporaryDir tmp;
   auto root = tmp.path();
   QByteArray bytes = "sample executable";
@@ -71,4 +74,5 @@ int main(int argc, char **argv) {
   check(clearRuntimeOverride(root), "rollback");
   check(activeRuntimeVersion(root).isEmpty() && QFile::exists(path),
         "rollback preserves running executable");
+#endif
 }
