@@ -85,7 +85,7 @@ uses an ad-hoc signature for test purposes, not Developer ID notarization.
 No yt-dlp or Deno executables, runtime dependency DLLs, or third-party
 frameworks are copied into these packages.
 
-The OBS 32.2.0 baseline passed all four hosted jobs in [run 45528453220](https://github.com/myrqyry/streaming-media-source/actions/runs/45528453220). Newer provider changes and OBS 33 remain in qualification, not a support announcement.
+The OBS 32.2.0 baseline passed all four hosted jobs in [run 45528453220](https://github.com/myrqyry/streaming-media-source/actions/runs/45528453220). The later merged video/audio baseline passed all eight OBS 32/33 matrix jobs in [run 45542976014](https://github.com/myrqyry/streaming-media-source/actions/runs/45542976014). TikTok-specific changes remain outside that hosted qualification.
 Neither CI test archives nor release binaries are uploaded. Actual OBS
 load, playback, audio, playlist imports, and clean teardown on the target
 platforms remain necessary before claiming production support.
@@ -185,6 +185,5 @@ The OBS 33 archive/header hashes and exact upstream patch targets were
 verified locally; the seven Python verifier tests and all nine C++
 regressions passed with the pinned OBS 32 SDK. Both legacy and modern
 package layouts were staged with identical module bytes using that SDK.
-That validates packaging, not OBS 33 binary compatibility. All actual
-OBS 33 native builds and runtime playback remain pending until tested.
+That validates packaging, not OBS 33 binary compatibility. The subsequent merged video/audio baseline passed actual native builds, deterministic tests and packaging across the complete OBS 32/33 matrix ([run 45542976014](https://github.com/myrqyry/streaming-media-source/actions/runs/45542976014)). Actual OBS 33 playback and the newer TikTok matrix remain unqualified.
 The full matrix covers eight jobs; no binaries are published by CI.

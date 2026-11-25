@@ -1,14 +1,18 @@
 #pragma once
 #include <QByteArray>
 #include <QJsonObject>
+#include <QList>
 #include <QString>
+#include <memory>
+class QTemporaryDir;
 enum class MediaProvider {
   Unknown,
   YouTube,
   Twitch,
   Kick,
   SoundCloud,
-  Bandcamp
+  Bandcamp,
+  TikTok
 };
 MediaProvider mediaProvider(const QString &url);
 QString canonicalKickUrl(const QString &url);
@@ -36,6 +40,8 @@ struct Media {
   QString title, direct, manifest, error, videoUrl, audioUrl;
   QByteArray videoPlaylist, audioPlaylist;
   QJsonObject info;
+  std::shared_ptr<QTemporaryDir> temporaryMedia;
+  QString localFile;
   bool live = false;
   bool hlsDirect = false;
   bool segmentVod = false;
@@ -56,3 +62,11 @@ Media selectAudioMedia(const QByteArray &json,
                        const std::function<bool(const QString &, bool)> &probe,
                        MediaProvider provider);
 bool audioOnlyProvider(MediaProvider provider);
+
+constexpr qint64 TikTokDownloadLimit = 64LL * 1024 * 1024;
+struct TikTokDownloadCandidate {
+  QString formatId, downloadSelector;
+  qint64 expectedBytes = 0;
+};
+QList<TikTokDownloadCandidate> tiktokDownloadCandidates(const QByteArray &json,
+                                                        int maxHeight);

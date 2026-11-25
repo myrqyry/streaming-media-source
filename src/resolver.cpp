@@ -140,7 +140,23 @@ static QString canonicalAudioTrack(const QString &s) {
 bool audioOnlyProvider(MediaProvider p) {
   return p == MediaProvider::SoundCloud || p == MediaProvider::Bandcamp;
 }
+static QString canonicalTikTokPost(const QString &s) {
+  QUrl u(s, QUrl::StrictMode);
+  if (s.size() > 2048 || !httpsUrl(s, u) || u.authority().contains('@') ||
+      !QStringList{"tiktok.com", "www.tiktok.com", "m.tiktok.com"}.contains(
+          u.host()))
+    return {};
+  static const QRegularExpression post(
+      "^/@([A-Za-z0-9_.]{1,32})/video/([1-9][0-9]{14,19})/?$");
+  auto m = post.match(u.path(QUrl::FullyEncoded));
+  return m.hasMatch() ? "https://www.tiktok.com/@" + m.captured(1) + "/video/" +
+                            m.captured(2)
+                      : QString{};
+}
 QString canonicalProviderUrl(const QString &url) {
+  auto tiktok = canonicalTikTokPost(url);
+  if (!tiktok.isEmpty())
+    return tiktok;
   auto twitch = canonicalTwitchUrl(url);
   if (!twitch.isEmpty())
     return twitch;
@@ -148,6 +164,8 @@ QString canonicalProviderUrl(const QString &url) {
   return kick.isEmpty() ? canonicalAudioTrack(url) : kick;
 }
 QString providerExtractor(const QString &url) {
+  if (!canonicalTikTokPost(url).isEmpty())
+    return "tiktok";
   auto audio = canonicalAudioTrack(url);
   if (!audio.isEmpty())
     return audio.startsWith("https://soundcloud.com/") ? "soundcloud"
@@ -161,6 +179,8 @@ QString providerExtractor(const QString &url) {
 }
 QString providerExtractorKey(const QString &url) {
   auto e = providerExtractor(url);
+  if (e == "tiktok")
+    return "TikTok";
   if (e == "soundcloud")
     return "Soundcloud";
   if (e == "bandcamp")
@@ -177,6 +197,8 @@ MediaProvider mediaProvider(const QString &s) {
     return MediaProvider::Twitch;
   if (!canonicalKickUrl(s).isEmpty())
     return MediaProvider::Kick;
+  if (!canonicalTikTokPost(s).isEmpty())
+    return MediaProvider::TikTok;
   auto audio = canonicalAudioTrack(s);
   if (!audio.isEmpty())
     return audio.startsWith("https://soundcloud.com/")
@@ -194,6 +216,10 @@ bool validMediaUrl(const QString &s, MediaProvider provider) {
   };
   if (provider == MediaProvider::YouTube)
     return within("googlevideo.com");
+  if (provider == MediaProvider::TikTok)
+    return !u.hasFragment() && !u.authority().contains('@') &&
+           (h == "v16-webapp-prime.us.tiktok.com" ||
+            h == "v19-webapp-prime.us.tiktok.com");
   if (provider == MediaProvider::SoundCloud)
     return h == "cf-media.sndcdn.com" ||
            h == "playback.media-streaming.soundcloud.cloud";
@@ -454,6 +480,57 @@ static bool kickClipFormat(const QJsonObject &root, const QJsonObject &f,
          f.value("vcodec").toString() != "none" &&
          f.value("acodec").toString() != "none";
 }
+// TikTok currently has only a narrowly qualified public, progressive route.
+static bool tiktokPostFormat(const QJsonObject &root, const QJsonObject &f) {
+  auto availability = root.value("availability").toString();
+  int w = f.value("width").toInt(), h = f.value("height").toInt();
+  return root.value("extractor_key") == "TikTok" &&
+         !root.value("is_live").toBool() && !root.value("has_drm").toBool() &&
+         (availability.isEmpty() || availability == "public") &&
+         !f.value("has_drm").toBool() && f.value("protocol") == "https" &&
+         f.value("ext") == "mp4" && f.value("vcodec") == "h264" &&
+         f.value("acodec") == "aac" && w > 0 && h > 0 && w <= 4320 &&
+         h <= 4320 &&
+         validMediaUrl(f.value("url").toString(), MediaProvider::TikTok);
+}
+QList<TikTokDownloadCandidate> tiktokDownloadCandidates(const QByteArray &json,
+                                                        int maxHeight) {
+  const auto root = QJsonDocument::fromJson(json).object();
+  struct Candidate {
+    TikTokDownloadCandidate choice;
+    double quality;
+  };
+  QList<Candidate> eligible;
+  const auto items = root.value("formats").toArray();
+  static const QRegularExpression idPattern("^h264_[A-Za-z0-9_-]{1,80}$");
+  for (int i = 0; i < items.size() && i < 1000; ++i) {
+    auto f = items[i].toObject();
+    auto id = f.value("format_id").toString();
+    double size = f.value("filesize").toDouble(-1);
+    int w = f.value("width").toInt(), h = f.value("height").toInt();
+    if (!tiktokPostFormat(root, f) || !idPattern.match(id).hasMatch() ||
+        std::min(w, h) > maxHeight || !std::isfinite(size) || size <= 0 ||
+        size > TikTokDownloadLimit || std::floor(size) != size)
+      continue;
+    auto host = QUrl(f.value("url").toString()).host();
+    auto selector =
+        id + "[protocol=https][ext=mp4][vcodec=h264][acodec=aac][filesize<=" +
+        QString::number(TikTokDownloadLimit) + "][url^=\"https://" + host +
+        "/\"]";
+    eligible.prepend({{id, selector, qint64(size)},
+                      double(h) * 1000000 + f.value("tbr").toDouble()});
+  }
+  std::stable_sort(
+      eligible.begin(), eligible.end(),
+      [](const auto &a, const auto &b) { return a.quality > b.quality; });
+  QList<TikTokDownloadCandidate> result;
+  for (const auto &c : eligible) {
+    if (result.size() >= 4)
+      break;
+    result.append(c.choice);
+  }
+  return result;
+}
 Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
   Media m;
   QJsonParseError e;
@@ -487,6 +564,13 @@ Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
       m.error = "Unsupported Kick extractor response";
       return m;
     }
+  }
+  if (provider == MediaProvider::TikTok &&
+      (tracks.size() > 1 ||
+       !tiktokPostFormat(o,
+                         tracks.size() == 1 ? tracks.at(0).toObject() : o))) {
+    m.error = "Unsupported TikTok public video rendition";
+    return m;
   }
   if (tracks.size() == 2) {
     QJsonObject v, a;
@@ -559,6 +643,13 @@ Media selectMedia(const QByteArray &bytes, int maxHeight,
     if (!validMediaUrl(f.value("url").toString(), provider) ||
         f.value("has_drm").toBool())
       continue;
+    if (provider == MediaProvider::TikTok) {
+      if (tiktokPostFormat(root, f) &&
+          std::min(f.value("height").toInt(), f.value("width").toInt()) <=
+              maxHeight)
+        combined.push_back(f);
+      continue;
+    }
     bool kickClip = kickClipFormat(root, f, provider);
     bool clip = twitchClipFormat(root, f, provider) || kickClip;
     bool v = hasTrack(f, "vcodec") || clip, a = hasTrack(f, "acodec") || clip;
@@ -625,7 +716,10 @@ Media selectMedia(const QByteArray &bytes, int maxHeight,
       return m;
   }
   Media m;
-  m.error = "No reachable video and audio rendition";
+  m.error = provider == MediaProvider::TikTok
+                ? "No reachable public TikTok MP4 (media access denied or "
+                  "unsupported rendition)"
+                : "No reachable video and audio rendition";
   return m;
 }
 

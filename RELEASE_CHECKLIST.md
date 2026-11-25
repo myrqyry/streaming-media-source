@@ -29,7 +29,7 @@ Before a first public release:
   development machine; cross-distro ABI qualification is still required.
   Current qualified target is native Linux OBS 32.x; Windows/macOS
   native build/test/package qualification passed on merged CI baseline;
-  current provider changes and live playback still require native verification.
+  the merged video/audio baseline has since passed all eight OBS 32/33 jobs; TikTok-specific CI and cross-platform live playback remain pending.
   Flatpak is unqualified. Keep the
   source ID and install module name stable across repository renames.
 - Run deterministic CTest plus real playback, queue, injected decoder
@@ -37,8 +37,7 @@ Before a first public release:
   Validate production GPU decoding separately from Xvfb/software decoding.
 - Completed: v0.5.1 dock screenshot from a disposable OBS scene,
   issue template with version and redaction guidance, local package
-  instructions and troubleshooting table. Refresh the screenshot for the
-  playlist import UI before public release.
+  instructions and troubleshooting table. Updated: current video and audio dock screenshots captured in disposable OBS 32.2 profiles.
 - v0.6.0 playlist import and normal playback smoke passed with the bundled
   engine; 9 native CTest cases passed. Mixed-link choice and source-change
   cancellation were not independently exercised in the live smoke.
@@ -53,11 +52,12 @@ The repository was previously private and its existing history is now
 public. Review any historical development notes for sensitive information.
 No release binaries should be published until the remaining gates are met.
 
-- OBS 33.0.3: verify all eight OBS 32/33 matrix jobs on the current provider
-  branch, then exercise native module loading, real playback, queueing,
+- OBS 33.0.3: all eight jobs passed on the merged video/audio baseline. Rerun the matrix for TikTok, then exercise native module loading, real playback, queueing,
   generated thumbnails, mixer audio and clean teardown on the intended
   hosts. Validate modern install discovery and removal of duplicate legacy
   copies. Keep binaries built against OBS 33 out of OBS 32 installations.
   The SDK pins and layout verification alone do not establish compatibility.
 
 - Streaming Audio: local OBS 32.2 mixer/transport/artwork/cross-provider EOF smokes passed; qualify audio recovery, SoundCloud collection playback/metadata, HLS artwork and remote requests in audio mode, OBS 33 and native Windows/macOS playback before declaring support.
+
+- TikTok: owner sample passed Linux OBS 32.2 playback and normal cleanup; qualify additional posts, natural EOF from TikTok, cancellation mid-download, crash cleanup and OBS 33/Windows/macOS before broader support claims.

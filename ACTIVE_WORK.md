@@ -663,3 +663,79 @@ build/installed-backups and retaining the existing runtime and data.
 Installed bytes matched the freshly checked build. OBS was not restarted.
 Final deterministic verification: 9/9 CTest, 7/7 native verifier tests and
 README links passed. New branch publication authorized by owner.
+
+## Experimental TikTok video route
+Owner requested TikTok in the video source. Local feature/tiktok-video
+from merged origin/master a1a7f0d (includes PRs #2 and #3).
+Pinned yt-dlp 2026.11.23 extracted several public test posts: TikTok exact
+key, combined H264/AAC HTTPS MP4, typically 576x1024, hosts
+v16-webapp-prime.us.tiktok.com / v19-webapp-prime.us.tiktok.com,
+thumbnail p16-common-sign.tiktokcdn-us.com. Other posts explicitly IP
+blocked or unavailable. All sampled media probes failed; patrox sample
+403 Akamai TCP_DENIED Access Denied even with full extractor HTTP headers,
+and bare ffprobe failed. Signed expire date 2026-11-27 04:18:19 UTC vs
+response 2026-11-25 04:17:53 UTC, so not an expired URL explanation.
+No signed URLs recorded, no bypass or credentials attempted.
+Experimental canonical public post route, exact extractor/CDN allowlist,
+combined known H264/AAC MP4 only, portrait short-edge cap, MP4 ftyp
+preflight, queue labels and thumbnail allowlist. Video source only.
+RED/green resolver coverage incl fallback, DRM, unsafe hosts, source
+isolation. 9/9 CTest passed. Real isolated OBS test
+build/tiktok-native-tiktok.log exit1: explicit no-reachable-MP4 error,
+width0 height0 frames0 source_audio0 mixed0 state7, source released.
+This is a verified failure path, NOT successful TikTok playback.
+YouTube regression build/tiktok-native-youtube.log exit0:
+1920x1080, source audio38/mixed40, controls and four-entry DOOM playlist
+cancel/import/playback all pass, source released.
+Blocker: accessible public TikTok media response for native HTTPS decoder.
+Next: test a reachable public full-post URL; verify actual video/audio,
+pause/seek, portrait preview, queue metadata/EOF/transition. Short links,
+live and photo posts intentionally out of scope. No install/push.
+
+## TikTok owner-sample playback checkpoint
+Owner supplied public post 7692602971711982879. All separate HTTP probes
+returned 403, but bundled yt-dlp's ordinary downloader succeeded without
+cookies, with a 10 KiB test and complete 9,687,204-byte MP4. FFprobe
+confirmed H264/AAC, 576x576, 155.505011s. Added provider-only temporary
+download path: exact extractor, post identity, known size <=64 MiB,
+validated format ID/host/codec selector, four candidates, 45s download
+deadline, cancellation by epoch, disk reserve and completed size/ftyp
+checks. Quoted URL-prefix filter required by yt-dlp. Temporary ownership
+transfers to decoder, retired on update and removed on normal teardown.
+Added observed p19 artwork host. No browser or cookie fallback.
+RED/green resolver candidate tests, 9/9 CTest. Final isolated smoke
+build/tiktok-owner-native2.log exit0: 576x576 nonblack31, source audio17,
+mixed34, duration155505, controls all1, dock thumbnail1, generated preview
+captured/cache/audio1, metadata/reorder1, YouTube natural EOF and automatic
+advance back to TikTok1, queue edit/next/stop1, source released; scene weak
+ref not expired at measurement (existing harness boundary). No MP4s left
+in isolated TMPDIR. Does not prove TikTok natural EOF or mid-download
+cancellation, broader post coverage, Windows file-handle cleanup or
+crash cleanup. Owner requested clean handoff: docs updated, standalone
+test MP4s removed, logs retained, local commit. No install or push requested.
+
+## README organization and installation checkpoint
+Owner requested installation of 883d53a, then README cleanup. Installed the
+verified Linux module atomically into the existing OBS 32 plugin directory;
+previous binary preserved in build/installed-backups/20261124-223846-pre-tiktok.
+Installed SHA-256 82a95b5607c3b6c0128afb36b9e8d81f92971108439ad65d41c2a9582e809499;
+runtime 2026.11.23 retained; OBS was closed. All nine tests passed.
+Reorganized README into a user-facing overview with the mixed-provider
+matrix, quick start, collections, installation and qualification boundaries.
+Moved detailed instructions to docs/{build-install,providers,playback,
+websocket,architecture}.md, retaining the historical screenshot with its
+explicit older-build caption. Confirmed merged baseline a1a7f0d passed
+all eight OBS 32/33 hosted jobs (run 45542976014); newer TikTok branch
+has not run that matrix. Updated related CI/runtime/release notes.
+Checked relative file links, heading anchors and README link regression.
+Documentation-only local checkpoint; no further install or publication.
+
+## Current dock screenshots
+Captured installed 883d53a video and audio docks with mixed-provider
+queues in separate disposable OBS 32.2/Xvfb profiles. Resolved inherited
+profile location overrides to use the built-in Yami dark theme; actual
+media and native control icons visible. Both capture processes exited 0.
+Selected visually inspected dock-only images (410x530), optimized PNGs
+with no profile data or raw logs included. Video queue scrolls normally.
+README now shows both source modes. Owner requested branch push; added
+feature/tiktok-video to the existing CI branch triggers for qualification.

@@ -3,6 +3,15 @@
 This log describes development checkpoints. No public release has been
 published.
 
+## Unreleased — TikTok video
+
+- Initial public TikTok post playback via bounded temporary MP4 download
+  using bundled yt-dlp, with native OBS video/audio playback.
+- Owner's sample passed real Linux OBS 32.2 playback, transport, generated
+  previews, mixed-provider queue advancement and normal temporary-file cleanup.
+- Broader post coverage, cancellation mid-download, crash cleanup and
+  cross-platform playback remain unqualified.
+
 ## Unreleased — Streaming Audio
 
 - Dedicated audio-only OBS source with shared transport, mixer, metadata and

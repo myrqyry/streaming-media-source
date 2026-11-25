@@ -27,6 +27,10 @@ bool validThumbnailUrl(const QString &url, MediaProvider provider) {
       url.contains('\r'))
     return false;
   auto h = u.host().toLower();
+  if (provider == MediaProvider::TikTok)
+    return (h == "p16-common-sign.tiktokcdn-us.com" ||
+            h == "p19-common-sign.tiktokcdn-us.com") &&
+           !u.authority().contains('@');
   if (provider == MediaProvider::SoundCloud)
     return h == "i1.sndcdn.com";
   if (provider == MediaProvider::Bandcamp)
@@ -93,6 +97,8 @@ QJsonObject normalizedMediaInfo(const QJsonObject &root,
   for (int i = 0; i < formats.size() && i < 1000; i++) {
     auto f = formats.at(i).toObject();
     auto h = f.value("height").toInt();
+    if (provider == MediaProvider::TikTok)
+      h = std::min(h, f.value("width").toInt());
     if (h > 0 && h <= 4320 && !f.value("has_drm").toBool() &&
         f.value("vcodec").toString() != "none" &&
         validMediaUrl(f.value("url").toString(), provider))
