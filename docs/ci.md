@@ -57,3 +57,82 @@ The temporary archives are intentionally not release packages. Public
 redistribution requires the owner to establish licensing, provenance and
 platform qualification first. Never publish local logs, scenes, models,
 private development notes, or third-party executables by default.
+
+## Windows and macOS qualification
+
+The native qualification matrix adds Windows x64 (Visual Studio 2026),
+macOS Apple Silicon and macOS Intel (Xcode) to the existing Linux job.
+It uses the same checksum-pinned OBS 32.2.0 source archive and WebSocket
+API header; OBS's own dependency bootstrap verifies the matching Qt and
+obs-deps archives specified in its CMakePresets.json.
+
+Run on a matching native host with Python 3.12+, CMake and the appropriate
+compiler and SDK installed:
+
+    python .github/scripts/verify-native.py <new-empty-work-directory>
+
+The job builds the OBS development SDK, builds the plugin and runs all
+nine deterministic regression executables. The Linux-only updater's
+filesystem activation tests are only applicable on Linux; its release
+metadata validation is tested on all platforms. The live YouTube/X11
+harness remains Linux-only.
+
+Windows stages a per-plugin folder with bin/64bit/obs-streaming-media.dll
+and data/licenses. macOS stages obs-streaming-media.plugin with the native
+Mach-O binary, bundle metadata and license resources. The jobs validate
+architecture, installed contents, archive integrity and SHA-256. macOS
+uses an ad-hoc signature for test purposes, not Developer ID notarization.
+No yt-dlp or Deno executables, runtime dependency DLLs, or third-party
+frameworks are copied into these packages.
+
+The new jobs are qualification in progress, not a support announcement.
+Neither CI test archives nor release binaries are uploaded. Actual OBS
+load, playback, audio, playlist imports, and clean teardown on the target
+platforms remain necessary before claiming production support.
+
+### OBS 32.2.0 SDK compatibility corrections
+
+The first native qualification run (45511857181) passed Linux but exposed
+two upstream SDK defects. MSVC rejects the boolean list getter's read of
+the double union member (C4244/C2220); the getter must read the boolean
+member used by the corresponding insertion functions. Both Mac runners
+built libobs but failed to resolve the generated framework-relative
+imported target. The native verifier applies one exact, checked source
+replacement for each affected platform after verifying the upstream
+archive checksum. macOS CMake package exports move to lib/cmake while
+frameworks and headers stay in their normal locations. The patches fail
+closed if the original source text changes. They affect only the
+temporary SDK build, not the user's OBS installation or our plugin.
+
+The second qualification pass (PR run 45512874672, commit 72af0c8)
+successfully built the Windows SDK and compiled and ran all nine tests
+on both Mac architectures. Windows stopped at dependency-directory
+selection: upstream also provisions x86 helper dependencies. The verifier
+now selects the exact pinned x64 pair and rejects a missing required
+directory. macOS installation succeeded but the lipo invocation had
+the input file after -verify_arch; the input now precedes the operation.
+The deployment target is macOS 13.0 to match the linked Qt framework
+minimum reported by the linker. Regression tests reproduce both
+verifier defects. Native package qualification still requires a green
+rerun; live playback remains a separate gate.
+
+### Windows headless Qt platform
+
+PR run [45514383898](https://github.com/myrqyry/streaming-media-source/actions/runs/45514383898)
+at 1f1f7c8 passed Linux and both Mac native build/test/archive jobs.
+Windows compiled successfully and passed eight of nine tests; the
+dock-theme-test timed out with no diagnostic output. Inspection of the
+central directory of the exact pinned Windows Qt dependency asset
+(windows-deps-qt6-2026-07-15-x64.zip) found qminimal.dll, qwindows.dll
+and qdirect2d.dll, but no qoffscreen.dll. The test had forced offscreen
+on every platform. Windows now uses minimal and the verifier checks its
+DLL exists before launching CTest; Linux and macOS retain offscreen.
+The test emits startup/platform/teardown diagnostics to stderr.
+The narrow-layout test assigns the dock width explicitly, verifying
+a preview no wider than 80 pixels at a 240-pixel dock width rather than
+depending on top-level window manager sizing or default fonts.
+The same assertions pass locally with both Qt backends. All nine Linux
+tests and four Python verifier tests passed. Hosted Windows qualification
+requires a successful rerun. The pinned Mac universal dependency choice
+is tested for both architectures; OBS/Qt dependencies are explicitly
+unpacked by role.

@@ -13,6 +13,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <obs.h>
@@ -31,7 +32,17 @@ static QColor pixel(QToolButton *b) {
   return b->icon().pixmap(16, 16, QIcon::Normal).toImage().pixelColor(8, 8);
 }
 int main(int argc, char **argv) {
+  // Windows Qt can route messages to the debugger instead of the
+  // CTest console. Make startup and failure output visible on every host.
+  qInstallMessageHandler(
+      [](QtMsgType, const QMessageLogContext &, const QString &msg) {
+        fprintf(stderr, "%s\n", qPrintable(msg));
+        fflush(stderr);
+      });
+  fprintf(stderr, "dock-theme-test: starting QApplication\n");
+  fflush(stderr);
   QApplication app(argc, argv);
+  qInfo() << "dock-theme-test: platform" << app.platformName();
   check(previewSize(1920, 1080) == QSize(320, 180), "landscape preview");
   check(previewSize(1080, 1920) == QSize(101, 180), "portrait preview");
   check(previewSize(0, 1080).isEmpty(), "invalid source dimensions");
@@ -58,6 +69,7 @@ int main(int argc, char **argv) {
       2, 2);
   check(decoded == captured, "preview round trip");
   QTemporaryDir tmp;
+  check(tmp.isValid(), "temporary test directory");
   check(obs_startup("en-US", qPrintable(tmp.path()), nullptr), "OBS startup");
   QImage red(16, 16, QImage::Format_ARGB32);
   red.fill(Qt::red);
@@ -99,9 +111,14 @@ int main(int argc, char **argv) {
   app.setFont(larger);
   settle();
   check(thumb->width() > previous, "thumbnail responds to font metrics");
-  dock->resize(240, 430);
+  const auto widePreview = thumb->width();
+  // Simulate the actual width assigned by the OBS dock host rather than
+  // relying on a top-level QPA window's platform-specific size hints.
+  dock->setFixedWidth(240);
   settle();
-  check(thumb->width() <= previous, "compact thumbnail fits narrow dock");
+  check(dock->width() == 240 && thumb->width() <= 80 &&
+            thumb->width() < widePreview,
+        "compact thumbnail fits narrow dock");
   if (!bundle.isEmpty() && !managed.isEmpty()) {
     auto engine = dock->findChild<QLabel *>("media-engine-status");
     auto update = dock->findChild<QAction *>("media-engine-check");
@@ -137,5 +154,7 @@ int main(int argc, char **argv) {
     dock.reset();
   }
   dock.reset();
+  qInfo() << "dock-theme-test: shutting down OBS";
   obs_shutdown();
+  qInfo() << "dock-theme-test: completed";
 }

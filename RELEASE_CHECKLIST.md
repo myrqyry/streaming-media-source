@@ -5,11 +5,10 @@ history remains a separate owner decision.
 
 Before a first public release:
 
-- Project license prepared locally: GPL-3.0-or-later, using the checked
+- Project license published: GPL-3.0-or-later, using the checked
   OBS and obs-websocket GPLv2-or-later API headers and compatible Qt
   open-source licensing. See [licensing and distribution](docs/licensing.md).
-  Owner approval and publication of the license are separate from preparing
-  this local checkpoint. Verify source provenance before release.
+  Verify source provenance before release.
   Provide corresponding source, exact dependency versions, build scripts
   and license notices with any public binary distribution.
 - Review all reachable Git history, not just HEAD, for private URLs,
@@ -28,7 +27,10 @@ Before a first public release:
 - Local Linux x86_64 CPack TGZ package and SHA-256 checksum are implemented.
   The extracted archive has passed real playback with an empty PATH on the
   development machine; cross-distro ABI qualification is still required.
-  Current target is native OBS 32.x, not Windows/macOS/Flatpak. Keep the
+  Current qualified target is native Linux OBS 32.x; Windows/macOS
+  native build/test/package qualification passed on merged CI baseline;
+  current provider changes and live playback still require native verification.
+  Flatpak is unqualified. Keep the
   source ID and install module name stable across repository renames.
 - Run deterministic CTest plus real playback, queue, injected decoder
   recovery, source resizing, WebSocket and source teardown verification.

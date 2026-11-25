@@ -559,3 +559,17 @@ Real isolated Linux OBS build/doom-playlist-smoke.log exit 0:
 alongside existing item, no playback interruption, metadata, first video
 selected and actually played, autoplay enabled, 27803 dimension queries,
 source released. CTest 9/9. No importer code change necessary.
+
+## Native CI integration
+Owner merged PR #1 at 6f38c4f (head bf0a32d). Hosted master run
+45528453220 completed successfully on Linux x86_64, Windows x64,
+macOS Apple Silicon and macOS Intel: pinned OBS 32.2.0 SDK build,
+regression tests and package verification. Windows headless Qt fix
+confirmed. Local master fast-forwarded to origin/master. Integrated
+merged baseline into feature/twitch-media without rewriting history.
+Single conflict in dock-theme-test resolved by retaining both the
+generated-preview assertions and native startup diagnostics. Combined
+feature branch rebuilt locally: 9/9 CTest, 4/4 Python verifier tests,
+minimal backend dock test and README link check pass. Native hosted
+qualification applies to merged baseline only, not the newer Twitch,
+Kick and generated preview changes. No feature push or install/restart.

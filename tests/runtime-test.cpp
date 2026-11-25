@@ -12,15 +12,28 @@ static void check(bool ok, const char *msg) {
     std::exit(1);
   }
 }
+static QString executablePath(const QString &path) {
+#ifdef Q_OS_WIN
+  return path + ".exe";
+#else
+  return path;
+#endif
+}
 static void fixture(const QString &path, bool executable = true) {
-  QFile f(path);
+  QFile f(executablePath(path));
   check(f.open(QIODevice::WriteOnly), "fixture");
   f.write("fixture");
   f.close();
+#ifndef Q_OS_WIN
   check(f.setPermissions(
             QFileDevice::ReadOwner | QFileDevice::WriteOwner |
             (executable ? QFileDevice::ExeOwner : QFileDevice::Permissions{})),
         "permissions");
+#else
+  // Windows determines executability by extension, not Unix mode bits.
+  if (!executable)
+    check(f.remove(), "missing executable fixture");
+#endif
 }
 int main(int argc, char **argv) {
   QCoreApplication app(argc, argv);
@@ -33,12 +46,13 @@ int main(int argc, char **argv) {
   fixture(root + "/bundled/yt-dlp");
   fixture(root + "/bundled/deno");
   auto r = findMediaRuntime(root + "/bundled", {root + "/system"}, false);
-  check(r.bundled && r.extractor == root + "/bundled/yt-dlp" &&
-            r.js == root + "/bundled/deno" && r.engine == "deno",
+  check(r.bundled && r.extractor == executablePath(root + "/bundled/yt-dlp") &&
+            r.js == executablePath(root + "/bundled/deno") &&
+            r.engine == "deno",
         "complete bundle preferred");
-  QFile::remove(root + "/bundled/deno");
+  QFile::remove(executablePath(root + "/bundled/deno"));
   r = findMediaRuntime(root + "/bundled", {root + "/system"}, false);
-  check(!r.bundled && r.extractor == root + "/system/yt-dlp" &&
+  check(!r.bundled && r.extractor == executablePath(root + "/system/yt-dlp") &&
             r.engine == "node",
         "incomplete bundle uses complete system pair");
   fixture(root + "/bundled/deno", false);
@@ -55,7 +69,8 @@ int main(int argc, char **argv) {
   fixture(manual + "/deno");
   r = selectMediaRuntime(root + "/missing", managed, {}, false);
   check(r.ready() && r.userProvided && !r.bundled &&
-            r.extractor == manual + "/yt-dlp" && r.js == manual + "/deno",
+            r.extractor == executablePath(manual + "/yt-dlp") &&
+            r.js == executablePath(manual + "/deno"),
         "user runtime selected without PATH");
   r = selectMediaRuntime(root + "/bundled", managed, {root + "/system"}, false);
   check(r.userProvided, "user runtime preferred over system fallback");

@@ -388,7 +388,8 @@ YouTube playback, or upload release binaries.
 | --- | --- |
 | Linux x86_64 / OBS 32.2 / Qt 6.4.2 | Local native tests, isolated real playback and bundled package smoke |
 | Ubuntu 24.04 / pinned OBS 32.2 SDK | Local and GitHub-hosted CI driver passed |
-| Windows, macOS, Flatpak, other OBS majors | Not qualified |
+| Windows x64, macOS Apple Silicon / Intel | Native SDK/build/test/package passed on merged baseline; current provider changes and live playback not yet qualified |
+| Flatpak, other OBS majors | Not qualified |
 
 The first hosted attempt was budget-blocked while the repository was private.
 After the owner made the repository public, the [retried hosted run](https://github.com/myrqyry/streaming-media-source/actions/runs/45412791743)
