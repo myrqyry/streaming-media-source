@@ -95,7 +95,7 @@ QString infoTooltip(const QJsonObject &info) {
   return lines.join("<br>");
 }
 QString cacheKey(const QString &url) {
-  auto twitch = canonicalTwitchUrl(url);
+  auto twitch = canonicalProviderUrl(url);
   return twitch.isEmpty() ? videoId(url) : twitch;
 }
 QImage decodeThumbnail(const QByteArray &bytes, QSize target) {
@@ -688,8 +688,7 @@ class MediaDock : public QWidget {
     } else if (!canonicalMediaUrl(value).isEmpty()) {
       action(immediate ? "load" : "append", value);
     } else {
-      url->setToolTip(
-          "Enter a YouTube video/playlist or Twitch channel/clip URL");
+      url->setToolTip("Enter a YouTube, Twitch or Kick media URL");
       url->setFocus();
       return;
     }
@@ -743,15 +742,16 @@ class MediaDock : public QWidget {
     }
     previewImage = QImage{};
     thumbnail->setPixmap({});
-    bool twitch = id.startsWith("twitch:");
-    thumbnail->setText(twitch         ? "Twitch · Preview unavailable"
-                       : id.isEmpty() ? "No video"
-                                      : "Preview unavailable");
+    bool external = id.startsWith("provider:");
+    auto provider = external ? mediaProvider(id.mid(9).section('|', 0, 0))
+                             : MediaProvider::YouTube;
+    thumbnail->setText(id.isEmpty() ? "No video" : "Preview unavailable");
     if (id.isEmpty() || !isVisible() ||
-        (twitch && !validThumbnailUrl(imageUrl, MediaProvider::Twitch)))
+        (external && !validThumbnailUrl(imageUrl, provider)))
       return;
-    QNetworkRequest request(QUrl(
-        twitch ? imageUrl : "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg"));
+    QNetworkRequest request(
+        QUrl(external ? imageUrl
+                      : "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg"));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::ManualRedirectPolicy);
     request.setTransferTimeout(8000);
@@ -790,7 +790,8 @@ class MediaDock : public QWidget {
     auto author = cached ? cached->metadata.author
                   : mediaProvider(u) == MediaProvider::Twitch
                       ? QString("Twitch")
-                      : QString{};
+                  : mediaProvider(u) == MediaProvider::Kick ? QString("Kick")
+                                                            : QString{};
     if (cached && cached->metadata.durationMs >= 0) {
       if (!author.isEmpty())
         author += " · ";
@@ -827,7 +828,7 @@ class MediaDock : public QWidget {
     p->deleteLater();
     metadataBytes.clear();
   }
-  void fetchTwitchMetadata(const QString &key) {
+  void fetchProviderMetadata(const QString &key) {
     auto engine = selectMediaRuntime(runtimeBundle, runtimeManaged);
     if (!engine.ready())
       return;
@@ -838,8 +839,8 @@ class MediaDock : public QWidget {
     p->setProgram(engine.extractor);
     p->setArguments({"--ignore-config", "--no-playlist", "--skip-download",
                      "--no-warnings", "--no-progress", "--socket-timeout", "8",
-                     "--retries", "0", "--use-extractors", twitchExtractor(key),
-                     "-J", "--", key});
+                     "--retries", "0", "--use-extractors",
+                     providerExtractor(key), "-J", "--", key});
     auto drain = [this, p] {
       if (metadataProcess != p)
         return;
@@ -863,9 +864,9 @@ class MediaDock : public QWidget {
         if (ok && !metadataOverflow) {
           auto doc = QJsonDocument::fromJson(metadataBytes);
           auto root = doc.object();
-          auto expected = twitchExtractorKey(key);
+          auto expected = providerExtractorKey(key);
           if (root.value("extractor_key").toString() == expected) {
-            auto info = normalizedMediaInfo(root, MediaProvider::Twitch);
+            auto info = normalizedMediaInfo(root, mediaProvider(key));
             cached->metadata.title = info.value("title").toString();
             cached->metadata.author = info.value("author").toString();
             cached->metadata.durationMs =
@@ -910,7 +911,9 @@ class MediaDock : public QWidget {
         break;
       auto original = item->data(UrlRole).toString();
       auto id = cacheKey(original);
-      bool twitch = mediaProvider(original) == MediaProvider::Twitch;
+      auto provider = mediaProvider(original);
+      bool twitch =
+          provider == MediaProvider::Twitch || provider == MediaProvider::Kick;
       if (id.isEmpty())
         continue;
       auto cached = playlistCache.object(id);
@@ -923,12 +926,12 @@ class MediaDock : public QWidget {
       bool metadata = !cached->titleDone;
       QUrl address;
       if (twitch && metadata) {
-        fetchTwitchMetadata(id);
+        fetchProviderMetadata(id);
         return;
       }
       if (twitch) {
         auto url = cached->metadata.details.value("thumbnail").toString();
-        if (!validThumbnailUrl(url, MediaProvider::Twitch)) {
+        if (!validThumbnailUrl(url, provider)) {
           cached->imageDone = true;
           continue;
         }
@@ -1077,7 +1080,7 @@ class MediaDock : public QWidget {
           playlistCache.insert(key, cached);
         }
         if (cached->metadata.details != info) {
-          if (mediaProvider(current) == MediaProvider::Twitch &&
+          if (mediaProvider(current) != MediaProvider::YouTube &&
               cached->metadata.details.value("thumbnail") !=
                   info.value("thumbnail")) {
             cached->imageDone = false;
@@ -1108,7 +1111,9 @@ class MediaDock : public QWidget {
 
       state = obs_source_media_get_state(s.get());
       duration = obs_source_media_get_duration(s.get());
-      live = duration <= 0 && twitchExtractor(current) == "twitch:stream" &&
+      live = duration <= 0 &&
+             (providerExtractor(current) == "twitch:stream" ||
+              providerExtractor(current) == "kick:live") &&
              (state == OBS_MEDIA_STATE_PLAYING ||
               state == OBS_MEDIA_STATE_PAUSED ||
               state == OBS_MEDIA_STATE_BUFFERING);
@@ -1119,10 +1124,10 @@ class MediaDock : public QWidget {
         text += QString(" · %1 × %2").arg(w).arg(h);
       status->setText(error.isEmpty() ? text : error);
       status->setToolTip(status->text());
-      auto twitch = canonicalTwitchUrl(current);
+      auto twitch = canonicalProviderUrl(current);
       auto imageUrl = info.value("thumbnail").toString();
       preview(twitch.isEmpty() ? videoId(current)
-                               : "twitch:" + twitch + "|" + imageUrl,
+                               : "provider:" + twitch + "|" + imageUrl,
               imageUrl);
     }
     auto pos = present ? obs_source_media_get_time(s.get()) : 0;

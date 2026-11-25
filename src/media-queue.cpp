@@ -28,16 +28,21 @@ QString canonicalMediaUrl(const QString &url) {
   auto id = videoId(url);
   if (!id.isEmpty())
     return "https://www.youtube.com/watch?v=" + id;
-  return canonicalTwitchUrl(url);
+  return canonicalProviderUrl(url);
 }
 QString mediaLabel(const QString &url) {
   auto id = videoId(url);
   if (!id.isEmpty())
     return id;
-  auto canonical = canonicalTwitchUrl(url);
+  auto canonical = canonicalProviderUrl(url);
   if (canonical.isEmpty())
     return {};
   auto u = QUrl(canonical);
+  if (mediaProvider(canonical) == MediaProvider::Kick)
+    return (providerExtractor(canonical) == "kick:live"   ? "Kick · "
+            : providerExtractor(canonical) == "kick:clip" ? "Kick clip · "
+                                                          : "Kick VOD · ") +
+           u.path().mid(1);
   return u.host() == "clips.twitch.tv"     ? "Twitch clip · " + u.path().mid(1)
          : u.path().startsWith("/videos/") ? "Twitch VOD · " + u.path().mid(8)
                                            : "Twitch · " + u.path().mid(1);
@@ -45,7 +50,7 @@ QString mediaLabel(const QString &url) {
 bool MediaQueue::append(const QString &url) {
   if (urls.size() >= 100 || canonicalMediaUrl(url.trimmed()).isEmpty())
     return false;
-  auto twitch = canonicalTwitchUrl(url.trimmed());
+  auto twitch = canonicalProviderUrl(url.trimmed());
   urls.append(twitch.isEmpty() ? url.trimmed() : twitch);
   return true;
 }
@@ -76,6 +81,14 @@ QString MediaQueue::serialize() const {
                                .toJson(QJsonDocument::Compact));
 }
 
+qint64 kickClipDuration(qint64 decoder, qint64 reported) {
+  // Kick clip HLS can include a small amount of segment padding. Only
+  // accept a positive, independently reported clip duration within 3s.
+  return decoder > 0 && reported > 0 && reported <= decoder &&
+                 decoder - reported <= 3000
+             ? reported
+             : decoder;
+}
 bool reachedVodEnd(qint64 position, qint64 duration, bool live) {
   if (live || duration <= 0 || position <= 0)
     return false;

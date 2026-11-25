@@ -2,8 +2,15 @@
 #include <QByteArray>
 #include <QJsonObject>
 #include <QString>
-enum class MediaProvider { Unknown, YouTube, Twitch };
+enum class MediaProvider { Unknown, YouTube, Twitch, Kick };
 MediaProvider mediaProvider(const QString &url);
+QString canonicalKickUrl(const QString &url);
+QString canonicalProviderUrl(const QString &url);
+QString providerExtractor(const QString &url);
+QString providerExtractorKey(const QString &url);
+bool validLivePlaylist(const QByteArray &body, MediaProvider provider);
+QByteArray normalizeFinitePlaylist(const QByteArray &body, const QString &base,
+                                   MediaProvider provider);
 QString canonicalTwitchUrl(const QString &url);
 QString twitchExtractor(const QString &url);
 QString twitchExtractorKey(const QString &url);
@@ -13,6 +20,8 @@ struct TwitchVodSlice {
   QByteArray manifest;
   qint64 startMs = 0, durationMs = 0;
 };
+TwitchVodSlice sliceFinitePlaylist(const QByteArray &normalized,
+                                   qint64 targetMs, bool allowTs);
 TwitchVodSlice sliceTwitchFmp4Playlist(const QByteArray &normalized,
                                        qint64 targetMs);
 bool validTwitchLivePlaylist(const QByteArray &body);

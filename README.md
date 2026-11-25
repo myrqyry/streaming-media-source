@@ -1,7 +1,7 @@
 # Streaming Media Source for OBS
 
 A standalone native OBS source for browser-free internet media playback. Paste a
-public YouTube video, Twitch live channel, clip or VOD URL into
+public YouTube video, Twitch or Kick live channel, clip or VOD URL into
 **Sources → Streaming Media**, or use the dock to import a public YouTube playlist.
 The original URL, not an expiring media URL, is stored in scene settings.
 Playback uses OBS's existing FFmpeg media engine; there is no browser,
@@ -97,7 +97,7 @@ CPack produces a compressed archive and SHA-256 file. The system-runtime
 build produces a separately named archive without the bundled executables.
 Do not upload bundled archives until the redistribution review is complete.
 
-Restart OBS when convenient. In source properties, paste a supported YouTube or Twitch URL and
+Restart OBS when convenient. In source properties, paste a supported YouTube, Twitch or Kick URL and
 select maximum resolution, hardware decoding, playback speed and network
 buffer. The source has OBS's normal media controls. Restart resolves a
 fresh media URL; expired URLs and extraction errors can require a fresh resolution.
@@ -162,6 +162,44 @@ The original OBS source identifier is unchanged, so existing scenes
 continue to use the same source type. Twitch channel collections,
 authenticated content, automatic offline waiting and audio-only playback
 are not yet supported.
+
+### Kick channels, clips and VODs
+
+Paste a public Kick channel URL (`https://kick.com/<channel>`), a public
+completed VOD (`https://kick.com/<channel>/videos/<uuid>`), or a clip
+(`https://kick.com/<channel>/clips/clip_<id>`) into the source or dock.
+These share the existing mixed-provider queue and metadata cache.
+Live channel resolution uses the dedicated Kick extractor and the observed
+live-video.net CDN; completed recordings and clips use finite validated HLS
+snapshots. Clips use explicit byte-range segments rather than progressive
+MP4 files, and some have no advertised resolution or codec metadata;
+their available single rendition can play regardless of the configured
+maximum resolution when the extractor does not report a height.
+Completed Kick VODs use segment-indexed seeking, retaining the full recording
+duration while reopening the containing segment. Seeks are segment-aligned,
+not frame-exact. The finite HLS timeline normalizes nonzero timestamps; for Kick clips,
+a positive reported duration may replace a decoder duration only when the
+difference is at most three seconds of trailing segment padding.
+
+The dock shows title, channel, category, description, available qualities,
+views and concurrent viewer count when supplied by the extractor. Counts
+are snapshots, not live polling. Clip thumbnails are supported; sampled
+live thumbnail requests returned HTTP 403 and a sampled completed VOD
+had no thumbnail. The dock falls back gracefully rather than bypassing
+access restrictions or inventing data.
+
+Only public content is supported. Ongoing VODs are rejected in favor of the
+live channel URL. Offline channels, inaccessible media, channel-wide
+video/clip imports and authentication are not supported by this slice.
+The observed CDN allowlist deliberately does not admit arbitrary
+CloudFront or other unrelated media hosts.
+
+Use `SMOKE_KICK=live`, `SMOKE_KICK=clip` or `SMOKE_KICK=vod` with
+the corresponding public URL in the isolated smoke harness. Set
+`SMOKE_KICK_NEXT` to an accessible public media URL for queue metadata;
+`SMOKE_KICK_EOF=1` additionally exercises natural completion and next
+item playback for a finite item. Live and archived media availability
+can change independently of the plugin.
 
 ### Visual playlists (0.4.1)
 
@@ -408,7 +446,7 @@ supported. No browser-cookie import, login, proxy, token-provider integration
 or automatic circumvention of unavailable media. Use content you have
 permission to play or rebroadcast. YouTube extraction can change independently
 of the plugin. Current verified scope is public YouTube VOD, sampled public
-Twitch live channels/clips and completed VODs, native Linux OBS and software decoding; hardware decoding is an option but is not yet qualified.
+Twitch and Kick live channels/clips and completed VODs, native Linux OBS and software decoding; hardware decoding is an option but is not yet qualified.
 
 See ACTIVE_WORK.md for exact runtime evidence and remaining work.
 

@@ -3,7 +3,7 @@
 This log describes development checkpoints. No public release has been
 published.
 
-## Unreleased — Twitch provider
+## Unreleased — Twitch and Kick providers
 
 - Public Twitch live channels, clips and completed VODs, sharing the existing native
   decoder, mixer routing and mixed-provider queue.
@@ -20,6 +20,14 @@ published.
   recordings tested in both formats, including EOF-driven queue advancement.
 - Real live/clip cross-queue smoke tests confirmed current and queued
   thumbnails and metadata while mixer audio continued.
+
+- Kick live channels, completed UUID VODs and clip URLs use exact extractor
+  routes, provider-specific CDN validation, normalized finite HLS including
+  explicit byte ranges, and shared native transport and queue metadata.
+- Kick live concurrent viewer counts and clip thumbnails when provided;
+  unavailable live/recording thumbnails remain absent. Clip duration
+  reconciliation handles a bounded segment-padding discrepancy. Indexed
+  Kick VOD seeking and actual clip/VOD natural-end advancement verified.
 
 ## 0.6.0 — Playlist imports
 

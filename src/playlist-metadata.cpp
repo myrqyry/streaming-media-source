@@ -27,6 +27,8 @@ bool validThumbnailUrl(const QString &url, MediaProvider provider) {
       url.contains('\r'))
     return false;
   auto h = u.host().toLower();
+  if (provider == MediaProvider::Kick)
+    return h == "stream.kick.com" || h == "clips.kick.com";
   return provider == MediaProvider::Twitch
              ? h == "static-cdn.jtvnw.net"
              : provider == MediaProvider::YouTube &&

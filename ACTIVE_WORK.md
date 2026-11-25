@@ -466,3 +466,52 @@ Real isolated Linux OBS, fresh HOME/empty PATH, pinned runtime:
 README/CHANGELOG/AGENTS updated; no production install or restart, no push,
 cross-platform PR untouched. Remaining audio-only, offline waiting,
 live refresh, cross-platform playback and broader VOD qualification.
+
+## Kick provider — live, clips, completed VODs
+Owner requested Kick support and invoked Desktop Commander plus API
+Documentation Checker. Checker received the explicitly observed yt-dlp
+CLI/JSON interface; returned success with no HTTP endpoints, as expected
+for CLI rather than official API. Actual pinned extractor and native
+playback evidence, not a claimed official HTTP API contract.
+Integrated MediaProvider::Kick, exact canonical public channel, UUID VOD
+and clip routes, dedicated kick:live/kick:vod/kick:clip extractors and
+response keys. Provider-specific media and thumbnail host checks;
+live-video.net subdomains, stream.kick.com, clips.kick.com and exact
+observed d26yk4zpyhjeeq.cloudfront.net. No arbitrary CloudFront allowance.
+Live prefetch URLs validated; finite HLS snapshot validates relative
+segment URLs and explicit bounded byte ranges for Kick. Unknown clip
+codec/height accepted only for the observed single HLS format; cap
+cannot be enforced when height is absent. Existing generic provider
+metadata pipeline includes viewer counts and category. Live image HTTP
+403 and archived VOD missing thumbnail; no bypass. Clip image passed.
+Ongoing VODs rejected; channel collection enumeration observed but imports
+not implemented. No official API credentials, auth or DRM work.
+
+RED/green tests for URL/extractor, provider isolation, live prefetch,
+byte ranges, clip format and mixed queue. Clip EOF initially failed:
+decoder duration 32000ms vs reported 30000ms, normalized highwater
+29973ms. Bounded clip duration reconciliation accepts positive reported
+duration within 3s of decoder duration; early interruption still rejected.
+Kick VOD native near-end seek initially required recovery. Generalized
+existing indexed fMP4 slicer to TS specifically for completed Kick VOD;
+byte-range inputs explicitly rejected by slicer (clips retain native seek).
+Segment-aligned, not frame-exact. Final CTest 9/9; README links pass.
+Real isolated Linux OBS, fresh HOME, empty PATH, pinned runtime:
+- build/kick-live.log exit 0: 1920x1080, nonblack18/source audio30/mixed29,
+  current info and viewers 1, queued clip metadata+image 1, continuing
+  and stopped 1; live image 0, 16762 dimension queries, source released.
+- build/kick-eof-fix.log exit 0: 1920x1080, nonblack38/source audio154/
+  mixed132, pause/seek/resume 1, duration30000, thumbnail1, queued
+  VOD metadata1, EOF 29973/30000 natural1, automatic next VOD audio1,
+  25160 queries and source teardown.
+- build/kick-vod-indexed.log exit 0: 1920x1080, nonblack30/source audio49/
+  mixed48, duration40955651, pause/seek/resume1, segment120000, elapsed
+ 120361, near-end segment40940450, natural EOF40955631/40955651,
+  advanced to clip with audio1, metadata/queue/stop1, VOD thumbnail0,
+  44056 queries and source teardown. No recovery needed on final run.
+Earlier successful native VOD and failed clip EOF runs retained in build.
+Previous provider deterministic regressions pass; real YouTube/Twitch
+network smokes not rerun after Kick changes. Broader CDN/format coverage,
+uninterrupted long-duration playback, audio-only, collections, Windows/
+macOS live playback remain unqualified. No production install/restart,
+push or merge; PR #1 untouched.

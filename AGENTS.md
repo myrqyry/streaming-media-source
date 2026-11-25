@@ -1,5 +1,5 @@
 # Streaming Media
-Standalone OBS C++/Qt Core plugin. Keep provider-specific validation, starting with YouTube and public Twitch
+Standalone OBS C++/Qt Core plugin. Keep provider-specific validation, starting with YouTube and public Twitch/Kick
 channels/clips/completed VODs, and use the existing OBS FFmpeg source as playback owner.
 Do not widen supported hosts or generic extractor access without evidence. No unrelated Aftermarket edits.
 Read ACTIVE_WORK.md before continuing. Build and run deterministic CTest,

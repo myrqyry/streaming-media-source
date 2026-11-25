@@ -75,11 +75,64 @@ QString twitchExtractorKey(const QString &url) {
          : e == "twitch:stream" ? "TwitchStream"
                                 : QString{};
 }
+QString canonicalKickUrl(const QString &s) {
+  QUrl u(s, QUrl::StrictMode);
+  if (s.size() > 2048 || !httpsUrl(s, u) ||
+      (u.host() != "kick.com" && u.host() != "www.kick.com"))
+    return {};
+  auto path = u.path(QUrl::FullyEncoded);
+  static const QRegularExpression channel("^/([A-Za-z0-9_-]{1,40})/?$");
+  static const QRegularExpression vod(
+      "^/([A-Za-z0-9_-]{1,40})/videos/"
+      "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]"
+      "{12})/?$");
+  static const QRegularExpression clip(
+      "^/([A-Za-z0-9_-]{1,40})/clips/(clip_[A-Za-z0-9]{26})/?$");
+  auto v = vod.match(path);
+  if (v.hasMatch())
+    return "https://kick.com/" + v.captured(1).toLower() + "/videos/" +
+           v.captured(2).toLower();
+  auto c = clip.match(path);
+  if (c.hasMatch())
+    return "https://kick.com/" + c.captured(1).toLower() + "/clips/" +
+           c.captured(2);
+  auto m = channel.match(path);
+  if (!m.hasMatch())
+    return {};
+  auto id = m.captured(1).toLower();
+  static const QStringList reserved{
+      "categories", "category",      "browse", "following", "search",
+      "settings",   "login",         "signup", "dashboard", "clips",
+      "videos",     "about",         "terms",  "privacy",   "help",
+      "community",  "subscriptions", "api",    "embed"};
+  return reserved.contains(id) ? QString{} : "https://kick.com/" + id;
+}
+QString canonicalProviderUrl(const QString &url) {
+  auto twitch = canonicalTwitchUrl(url);
+  return twitch.isEmpty() ? canonicalKickUrl(url) : twitch;
+}
+QString providerExtractor(const QString &url) {
+  auto kick = canonicalKickUrl(url);
+  if (kick.isEmpty())
+    return twitchExtractor(url);
+  return kick.contains("/videos/")  ? "kick:vod"
+         : kick.contains("/clips/") ? "kick:clip"
+                                    : "kick:live";
+}
+QString providerExtractorKey(const QString &url) {
+  auto e = providerExtractor(url);
+  return e == "kick:live"   ? "Kick"
+         : e == "kick:vod"  ? "KickVOD"
+         : e == "kick:clip" ? "KickClip"
+                            : twitchExtractorKey(url);
+}
 MediaProvider mediaProvider(const QString &s) {
   if (validYoutube(s))
     return MediaProvider::YouTube;
   if (!canonicalTwitchUrl(s).isEmpty())
     return MediaProvider::Twitch;
+  if (!canonicalKickUrl(s).isEmpty())
+    return MediaProvider::Kick;
   return MediaProvider::Unknown;
 }
 bool validMediaUrl(const QString &s, MediaProvider provider) {
@@ -101,9 +154,15 @@ bool validMediaUrl(const QString &s, MediaProvider provider) {
            h == "d1ndex63qxojbr.cloudfront.net" ||
            h == "d2nvs31859zcd8.cloudfront.net";
   }
+  if (provider == MediaProvider::Kick)
+    return h.endsWith(".live-video.net") || h == "stream.kick.com" ||
+           h == "clips.kick.com" || h == "d26yk4zpyhjeeq.cloudfront.net";
   return false;
 }
 bool validTwitchLivePlaylist(const QByteArray &body) {
+  return validLivePlaylist(body, MediaProvider::Twitch);
+}
+bool validLivePlaylist(const QByteArray &body, MediaProvider provider) {
   if (!body.startsWith("#EXTM3U") || body.size() > 1048576)
     return false;
   bool segment = false;
@@ -112,12 +171,18 @@ bool validTwitchLivePlaylist(const QByteArray &body) {
     if (line.isEmpty())
       continue;
     if (line.startsWith('#')) {
+      if (line.startsWith("#EXT-X-PREFETCH:") &&
+          provider == MediaProvider::Kick) {
+        if (!validMediaUrl(QString::fromUtf8(line.mid(16)), provider))
+          return false;
+        continue;
+      }
       if (line.contains("URI=") || line.startsWith("#EXT-X-STREAM-INF") ||
           line.startsWith("#EXT-X-I-FRAME-STREAM-INF") ||
           line.startsWith("#EXT-X-ENDLIST"))
         return false;
     } else {
-      if (!validMediaUrl(QString::fromUtf8(line), MediaProvider::Twitch))
+      if (!validMediaUrl(QString::fromUtf8(line), provider))
         return false;
       segment = true;
     }
@@ -126,7 +191,11 @@ bool validTwitchLivePlaylist(const QByteArray &body) {
 }
 QByteArray normalizeTwitchVodPlaylist(const QByteArray &body,
                                       const QString &base) {
-  if (body.size() > 1048576 || !validMediaUrl(base, MediaProvider::Twitch))
+  return normalizeFinitePlaylist(body, base, MediaProvider::Twitch);
+}
+QByteArray normalizeFinitePlaylist(const QByteArray &body, const QString &base,
+                                   MediaProvider provider) {
+  if (body.size() > 1048576 || !validMediaUrl(base, provider))
     return {};
   auto lines = body.split('\n');
   if (lines.isEmpty() || lines.first().trimmed() != "#EXTM3U")
@@ -141,7 +210,7 @@ QByteArray normalizeTwitchVodPlaylist(const QByteArray &body,
       return {};
     auto u = parent.resolved(part);
     auto absolute = QString::fromLatin1(u.toEncoded());
-    if (!validMediaUrl(absolute, MediaProvider::Twitch))
+    if (!validMediaUrl(absolute, provider))
       return {};
     auto path = u.path().toLower();
     if (!(path.endsWith(".mp4") || (!init && path.endsWith(".ts"))))
@@ -181,6 +250,13 @@ QByteArray normalizeTwitchVodPlaylist(const QByteArray &body,
       if (uri.isEmpty())
         return {};
       line = "#EXT-X-MAP:URI=\"" + uri + "\"";
+    } else if (line.startsWith("#EXT-X-BYTERANGE:") &&
+               provider == MediaProvider::Kick) {
+      static const QRegularExpression range(
+          "^#EXT-X-BYTERANGE:([1-9][0-9]{0,9})@([0-9]{1,13})$");
+      auto m = range.match(QString::fromUtf8(line));
+      if (!m.hasMatch() || m.captured(1).toLongLong() > 1000000000LL)
+        return {};
     } else if (line.startsWith('#')) {
       auto tag = line.split(':').first();
       if (!tags.contains(tag) || line.contains("URI="))
@@ -199,6 +275,10 @@ QByteArray normalizeTwitchVodPlaylist(const QByteArray &body,
 }
 TwitchVodSlice sliceTwitchFmp4Playlist(const QByteArray &normalized,
                                        qint64 targetMs) {
+  return sliceFinitePlaylist(normalized, targetMs, false);
+}
+TwitchVodSlice sliceFinitePlaylist(const QByteArray &normalized,
+                                   qint64 targetMs, bool allowTs) {
   // Input is our already validated finite, absolute-URI playlist. Rebuild
   // a minimal media playlist starting at the containing segment, retaining
   // the initialization map and discontinuity state of each remaining segment.
@@ -224,7 +304,9 @@ TwitchVodSlice sliceTwitchFmp4Playlist(const QByteArray &normalized,
         sequence = n;
       else
         discontinuitySequence = n;
-    } else if (line.startsWith("#EXT-X-MAP:"))
+    } else if (line.startsWith("#EXT-X-BYTERANGE:"))
+      return {};
+    else if (line.startsWith("#EXT-X-MAP:"))
       map = line;
     else if (line == "#EXT-X-DISCONTINUITY")
       discontinuity = true;
@@ -242,10 +324,10 @@ TwitchVodSlice sliceTwitchFmp4Playlist(const QByteArray &normalized,
     } else if (line == "#EXT-X-ENDLIST")
       ended = true;
     else if (!line.startsWith('#')) {
-      if (ended || info.isEmpty() || map.isEmpty() ||
-          !QUrl(QString::fromUtf8(line))
-               .path()
-               .endsWith(".mp4", Qt::CaseInsensitive) ||
+      auto path = QUrl(QString::fromUtf8(line)).path().toLower();
+      bool mp4 = path.endsWith(".mp4") && !map.isEmpty();
+      bool ts = allowTs && path.endsWith(".ts") && map.isEmpty();
+      if (ended || info.isEmpty() || (!mp4 && !ts) ||
           total + ms > 7LL * 24 * 3600 * 1000)
         return {};
       segments.append({info, line, map, total, ms, discontinuity});
@@ -306,6 +388,15 @@ static bool twitchClipFormat(const QJsonObject &root, const QJsonObject &f,
          f.value("vcodec").toString() != "none" &&
          f.value("acodec").toString() != "none";
 }
+static bool kickClipFormat(const QJsonObject &root, const QJsonObject &f,
+                           MediaProvider provider) {
+  return provider == MediaProvider::Kick &&
+         root.value("extractor_key").toString() == "KickClip" &&
+         !root.value("is_live").toBool() && hls(f) &&
+         f.value("ext").toString() == "mp4" &&
+         f.value("vcodec").toString() != "none" &&
+         f.value("acodec").toString() != "none";
+}
 Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
   Media m;
   QJsonParseError e;
@@ -328,6 +419,15 @@ Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
     }
     if (tracks.size() > 1) {
       m.error = "Twitch requires a combined audio/video stream";
+      return m;
+    }
+  }
+  if (provider == MediaProvider::Kick) {
+    auto key = o.value("extractor_key").toString();
+    if (tracks.size() > 1 ||
+        ((key != "Kick" || !m.live) && (key != "KickVOD" || m.live) &&
+         (key != "KickClip" || m.live))) {
+      m.error = "Unsupported Kick extractor response";
       return m;
     }
   }
@@ -375,7 +475,8 @@ Media parseMedia(const QByteArray &bytes, MediaProvider provider) {
   auto u = f.value("url").toString();
   if (!validMediaUrl(u, provider) || f.value("has_drm").toBool() ||
       (!(hasTrack(f, "vcodec") && hasTrack(f, "acodec")) &&
-       !twitchClipFormat(o, f, provider)) ||
+       !twitchClipFormat(o, f, provider) && !kickClipFormat(o, f, provider)) ||
+      (provider == MediaProvider::Kick && !hls(f)) ||
       (provider == MediaProvider::Twitch &&
        (o.value("extractor_key").toString() == "TwitchClips"
             ? f.value("protocol").toString() != "https"
@@ -401,10 +502,11 @@ Media selectMedia(const QByteArray &bytes, int maxHeight,
     if (!validMediaUrl(f.value("url").toString(), provider) ||
         f.value("has_drm").toBool())
       continue;
-    bool clip = twitchClipFormat(root, f, provider);
+    bool kickClip = kickClipFormat(root, f, provider);
+    bool clip = twitchClipFormat(root, f, provider) || kickClip;
     bool v = hasTrack(f, "vcodec") || clip, a = hasTrack(f, "acodec") || clip;
     int h = f.value("height").toInt();
-    if (v && (h <= 0 || h > maxHeight))
+    if (v && ((h <= 0 && !kickClip) || h > maxHeight))
       continue;
     if (v && a && (hls(f) || f.value("protocol").toString() == "https"))
       combined.push_back(f);

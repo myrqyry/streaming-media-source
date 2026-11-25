@@ -220,4 +220,77 @@ int main(int argc, char **argv) {
             normalize("#EXTM3U\n#EXTINF:5,\n0.ts\n#EXT-X-ENDLIST\n"), 0)
             .manifest.isEmpty(),
         "only fragmented MP4");
+  check(mediaProvider("https://kick.com/xqc") == MediaProvider::Kick,
+        "Kick live");
+  check(canonicalKickUrl("https://www.kick.com/XQC/videos/"
+                         "01A204BB-F2E0-7379-BDD1-A56390F10160?t=1") ==
+            "https://kick.com/xqc/videos/01a204bb-f2e0-7379-bdd1-a56390f10160",
+        "canonical Kick VOD");
+  check(canonicalKickUrl(
+            "https://kick.com/xqc/clips/clip_01M7QZ864DK0K76T3Q16X01S9B") ==
+            "https://kick.com/xqc/clips/clip_01M7QZ864DK0K76T3Q16X01S9B",
+        "Kick clip");
+  check(canonicalKickUrl("https://kick.com.evil.test/xqc").isEmpty() &&
+            canonicalKickUrl("https://kick.com/xqc/videos/no").isEmpty() &&
+            canonicalKickUrl("https://kick.com/xqc/clips").isEmpty(),
+        "reject invalid Kick routes");
+  check(validMediaUrl("https://a.playlist.live-video.net/index.m3u8",
+                      MediaProvider::Kick) &&
+            !validMediaUrl(
+                "https://a.playlist.live-video.net.evil.test/index.m3u8",
+                MediaProvider::Kick),
+        "Kick edge boundary");
+  check(!validMediaUrl("https://d26yk4zpyhjeeq.cloudfront.net/index.m3u8",
+                       MediaProvider::Twitch),
+        "Kick CDN isolated");
+  check(providerExtractor("https://kick.com/xqc") == "kick:live" &&
+            providerExtractorKey("https://kick.com/xqc") == "Kick",
+        "Kick extractor identity");
+  auto kickClip = QByteArray(
+      R"({"extractor_key":"KickClip","duration":30,"formats":[{"url":"https://clips.kick.com/clip/index.m3u8","protocol":"m3u8_native","ext":"mp4"}]})");
+  check(selectMedia(
+            kickClip, 1080, [](const QString &, bool h) { return h; },
+            MediaProvider::Kick)
+            .error.isEmpty(),
+        "Kick clip unknown codec and height");
+  auto kickBase = QString("https://clips.kick.com/clip/index.m3u8");
+  auto bytes = QByteArray("#EXTM3U\n#EXTINF:5,\n#EXT-X-BYTERANGE:100@0\nchunk."
+                          "ts\n#EXT-X-ENDLIST\n");
+  check(normalizeFinitePlaylist(bytes, kickBase, MediaProvider::Kick)
+            .contains(
+                "#EXT-X-BYTERANGE:100@0\nhttps://clips.kick.com/clip/chunk.ts"),
+        "Kick explicit byte range");
+  auto badRange = bytes;
+  badRange.replace("100@0", "0@0");
+  check(normalizeFinitePlaylist(badRange, kickBase, MediaProvider::Kick)
+            .isEmpty(),
+        "invalid range");
+  check(
+      normalizeFinitePlaylist(bytes, kickBase, MediaProvider::Twitch).isEmpty(),
+      "provider isolation");
+  check(validLivePlaylist(
+            "#EXTM3U\n#EXTINF:2,\nhttps://a.hls.live-video.net/"
+            "chunk.ts\n#EXT-X-PREFETCH:https://a.hls.live-video.net/next.ts\n",
+            MediaProvider::Kick),
+        "Kick live prefetch");
+  check(!validLivePlaylist(
+            "#EXTM3U\nhttps://a.hls.live-video.net/"
+            "chunk.ts\n#EXT-X-PREFETCH:https://evil.test/next.ts\n",
+            MediaProvider::Kick),
+        "unsafe prefetch");
+  auto kickTs = normalizeFinitePlaylist(
+      "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:8\n#EXTINF:10,\n0.ts\n#EXTINF:10,\n1."
+      "ts\n#EXTINF:5,\n2.ts\n#EXT-X-ENDLIST\n",
+      "https://stream.kick.com/test/index.m3u8", MediaProvider::Kick);
+  auto kickSlice = sliceFinitePlaylist(kickTs, 22000, true);
+  check(kickSlice.startMs == 20000 && kickSlice.durationMs == 25000 &&
+            kickSlice.manifest.contains("#EXT-X-MEDIA-SEQUENCE:10") &&
+            !kickSlice.manifest.contains("/0.ts") &&
+            kickSlice.manifest.contains("/2.ts"),
+        "indexed Kick TS tail");
+  check(sliceFinitePlaylist(
+            normalizeFinitePlaylist(bytes, kickBase, MediaProvider::Kick), 0,
+            true)
+            .manifest.isEmpty(),
+        "never discard clip byte range");
 }

@@ -16,6 +16,7 @@ public:
 QString videoId(const QString &url);
 QString canonicalMediaUrl(const QString &url);
 QString mediaLabel(const QString &url);
+qint64 kickClipDuration(qint64 decoder, qint64 reported);
 bool reachedVodEnd(qint64 position, qint64 duration, bool live);
 
 // A decoder may reset its clock before reporting EOF. Preserve observed

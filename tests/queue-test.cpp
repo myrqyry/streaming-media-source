@@ -84,6 +84,20 @@ int main(int argc, char **argv) {
         "canonical VOD persistence");
   check(MediaQueue::fromJson(twitch.serialize()).items() == twitch.items(),
         "mixed VOD queue roundtrip");
+  check(twitch.appendRequest("https://www.kick.com/XQC", {}, true) == "queued",
+        "Kick queue");
+  check(twitch.appendRequest("https://kick.com/xqc", {}, true) == "duplicate",
+        "Kick alias");
+  check(MediaQueue::fromJson(twitch.serialize()).items() == twitch.items(),
+        "three provider roundtrip");
+  check(kickClipDuration(32000, 30000) == 30000, "Kick clip bounded padding");
+  check(kickClipDuration(32000, 10000) == 32000,
+        "reject large duration mismatch");
+  check(kickClipDuration(32000, -1) == 32000, "missing clip duration");
+  check(reachedVodEnd(29973, kickClipDuration(32000, 30000), false),
+        "observed clip EOF");
+  check(!reachedVodEnd(15000, kickClipDuration(32000, 30000), false),
+        "early clip interruption");
   VodProgress progress;
   progress.observe(626590);
   progress.observe(633000);
