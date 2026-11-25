@@ -59,6 +59,45 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 100; i++)
     full.append(a);
   check(full.appendRequest(c, {}, true) == "queue_full", "bounded queue");
+  MediaQueue twitch;
+  auto clip = QString("https://clips.twitch.tv/ExampleClip-123");
+  check(twitch.append("https://www.twitch.tv/LofiGirl"),
+        "Twitch channel queue");
+  check(twitch.appendRequest(clip, {}, true) == "queued",
+        "Twitch clip request");
+  check(twitch.appendRequest(
+            "https://twitch.tv/user/clip/ExampleClip-123?foo=bar", {}, true) ==
+            "duplicate",
+        "canonical clip alias");
+  check(twitch.appendRequest("https://twitch.tv/lofigirl", {}, true) ==
+            "duplicate",
+        "channel case identity");
+  check(MediaQueue::fromJson(twitch.serialize()).items() == twitch.items(),
+        "mixed provider persistence");
+  check(twitch.appendRequest("https://m.twitch.tv/videos/123?t=2h", {}, true) ==
+            "queued",
+        "VOD queue request");
+  check(twitch.appendRequest("https://www.twitch.tv/videos/123", {}, true) ==
+            "duplicate",
+        "VOD canonical duplicate");
+  check(twitch.items().last() == "https://www.twitch.tv/videos/123",
+        "canonical VOD persistence");
+  check(MediaQueue::fromJson(twitch.serialize()).items() == twitch.items(),
+        "mixed VOD queue roundtrip");
+  check(twitch.appendRequest("https://www.kick.com/XQC", {}, true) == "queued",
+        "Kick queue");
+  check(twitch.appendRequest("https://kick.com/xqc", {}, true) == "duplicate",
+        "Kick alias");
+  check(MediaQueue::fromJson(twitch.serialize()).items() == twitch.items(),
+        "three provider roundtrip");
+  check(kickClipDuration(32000, 30000) == 30000, "Kick clip bounded padding");
+  check(kickClipDuration(32000, 10000) == 32000,
+        "reject large duration mismatch");
+  check(kickClipDuration(32000, -1) == 32000, "missing clip duration");
+  check(reachedVodEnd(29973, kickClipDuration(32000, 30000), false),
+        "observed clip EOF");
+  check(!reachedVodEnd(15000, kickClipDuration(32000, 30000), false),
+        "early clip interruption");
   VodProgress progress;
   progress.observe(626590);
   progress.observe(633000);

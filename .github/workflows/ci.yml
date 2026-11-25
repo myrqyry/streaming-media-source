@@ -3,7 +3,7 @@ name: Build and test
 on:
   pull_request:
   push:
-    branches: [main, master, ci/native-platforms]
+    branches: [main, master, ci/native-platforms, feature/twitch-media]
   workflow_dispatch:
 
 permissions:
@@ -15,8 +15,16 @@ concurrency:
 
 jobs:
   linux:
-    name: Linux x86_64 · OBS 32.2.0
-    runs-on: ubuntu-24.04
+    name: Linux x86_64 · OBS ${{ matrix.obs }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - obs: "32.2.0"
+            runner: ubuntu-24.04
+          - obs: "33.0.3"
+            runner: ubuntu-26.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,27 +48,28 @@ jobs:
             libxkbcommon-dev libx11-dev libx11-xcb-dev libxcb1-dev \
             libxcb-xinput-dev libglib2.0-dev zlib1g-dev
       - name: Prepare pinned OBS SDK
-        run: bash .github/scripts/prepare-obs32-sdk.sh "$RUNNER_TEMP/obs32"
+        run: bash .github/scripts/prepare-obs32-sdk.sh "$RUNNER_TEMP/obs-sdk" "${{ matrix.obs }}"
       - name: Build, test and verify the local install archive
-        run: bash .github/scripts/verify-linux.sh "$RUNNER_TEMP/obs32/sdk" "$RUNNER_TEMP/plugin-ci" obs-streaming-media 9
+        run: bash .github/scripts/verify-linux.sh "$RUNNER_TEMP/obs-sdk/sdk" "$RUNNER_TEMP/plugin-ci" obs-streaming-media 9
       - name: Record checksums in job summary
         run: |
           echo '### Verified local test archive (not uploaded)' >> "$GITHUB_STEP_SUMMARY"
           cat "$RUNNER_TEMP/plugin-ci/SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"
 
   native:
-    name: ${{ matrix.label }} · OBS 32.2.0
+    name: ${{ matrix.platform.label }} · OBS ${{ matrix.obs }}
     strategy:
       fail-fast: false
       matrix:
-        include:
+        obs: ["32.2.0", "33.0.3"]
+        platform:
           - label: Windows x64
             runner: windows-2025-vs2026
           - label: macOS Apple Silicon
             runner: macos-26
           - label: macOS Intel
             runner: macos-26-intel
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,4 +78,4 @@ jobs:
       - name: Native SDK, build, test and package
         shell: bash
 
-        run: python .github/scripts/verify-native.py "$RUNNER_TEMP/native-ci"
+        run: python .github/scripts/verify-native.py "$RUNNER_TEMP/native-ci" --obs-version "${{ matrix.obs }}"

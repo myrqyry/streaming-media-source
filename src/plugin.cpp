@@ -5,6 +5,7 @@
 #include "media-runtime.hpp"
 #include "media-websocket.hpp"
 #include "playlist-import.hpp"
+#include "preview-frame.hpp"
 #include "resolver.hpp"
 #include "runtime-update.hpp"
 #include <QDir>
@@ -23,13 +24,14 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <graphics/vec4.h>
 #include <mutex>
 #include <obs-module.h>
 #include <optional>
 #include <thread>
 OBS_DECLARE_MODULE()
 MODULE_EXPORT const char *obs_module_description(void) {
-  return "Streaming Media: native YouTube playback";
+  return "Streaming Media: native internet media playback";
 }
 namespace {
 struct Request {
@@ -72,19 +74,31 @@ struct Source {
   QTemporaryDir temp;
   std::atomic<bool> closing{false}, accept{false}, loading{false},
       failed{false}, finished{false};
-  std::atomic<int64_t> finalDuration{0};
+  std::atomic<int64_t> finalDuration{0}, kickClipReportedDuration{0};
   std::atomic<uint32_t> videoWidth{0}, videoHeight{0};
   std::atomic<bool> decoderEnded{false}, decoderUpdated{false};
   bool waitingDecoder = false;
   std::unique_ptr<AudioHandoff> audioHandoff;
   std::atomic<uint64_t> epoch{0};
+  // Graphics resources belong to the video tick; UI only requests a
+  // generation and copies a small published image, never renders directly.
+  std::atomic<uint64_t> previewRequest{0};
+  std::atomic<int64_t> previewRequestTime{0};
+  std::mutex previewMutex;
+  uint64_t previewGeneration = 0, captureGeneration = 0;
+  QImage capturedPreview;
+  gs_texrender_t *previewRender = nullptr;
+  gs_stagesurf_t *previewStage = nullptr;
+  QSize captureSize;
+  int capturePhase = 0;
+  int64_t previewRetryAt = 0;
   std::mutex mutex;
   std::condition_variable cv;
   Request current;
   std::optional<Request> pending;
   std::optional<Result> result;
   std::thread worker;
-  QString title, error;
+  QString title, error, mediaInfo;
   std::deque<QueueCommand> commands;
   QHash<QString, QString> requestResults;
   QStringList requestOrder;
@@ -92,6 +106,12 @@ struct Source {
   bool played = false, sessionLive = false;
   VodProgress progress;
   RecoveryPlan recovery;
+  VodClock vodClock;
+  std::atomic<bool> finiteHlsClock{false};
+  std::atomic<bool> segmentVod{false}, segmentSeeking{false},
+      segmentPaused{false};
+  std::atomic<int64_t> segmentStart{0}, segmentDuration{0};
+  std::optional<std::pair<uint64_t, int64_t>> pendingSegmentSeek;
   std::atomic<bool> resumeGate{false};
   int64_t resumeTarget = 0, resumeDeadline = 0;
   bool resumeIssued = false;
@@ -119,6 +139,9 @@ struct Source {
       audioHandoff->stop();
     if (worker.joinable())
       worker.join();
+    obs_enter_graphics();
+    destroyPreviewGraphics();
+    obs_leave_graphics();
     if (child) {
       obs_source_remove_active_child(parent, child);
       obs_source_release(child);
@@ -191,28 +214,42 @@ struct Source {
     failed = false;
     finished = false;
     finalDuration = 0;
+    kickClipReportedDuration = 0;
     progress.reset();
+    finiteHlsClock = false;
+    segmentVod = false;
+    segmentSeeking = false;
+    segmentPaused = false;
+    segmentStart = 0;
+    segmentDuration = 0;
+    vodClock.reset();
     lastDuration = 0;
     played = false;
     lastChildState = OBS_MEDIA_STATE_NONE;
     {
       std::lock_guard<std::mutex> l(mutex);
       pending.reset();
+      pendingSegmentSeek.reset();
       result.reset();
       title.clear();
+      mediaInfo.clear();
       error.clear();
     }
     clearChild();
   }
-  void queue(Request req, bool retry = false) {
+  void queue(Request req, bool retry = false, bool segmentManual = false) {
+    bool hold = segmentManual && segmentPaused.load();
     cancel(retry);
+    segmentSeeking = segmentManual;
+    segmentPaused = hold;
     resumeTarget = req.resumeMs;
-    resumeGate = resumeTarget > 0;
+    resumeGate = resumeTarget > 0 || segmentManual;
     if (req.url.isEmpty())
       return;
-    if (!validYoutube(req.url)) {
-      fail("Use an HTTPS YouTube URL");
-      blog(LOG_WARNING, "[streaming-media] Use an HTTPS YouTube URL");
+    if (canonicalMediaUrl(req.url).isEmpty()) {
+      fail("Use an HTTPS YouTube, Twitch or Kick video/channel URL");
+      blog(LOG_WARNING, "[streaming-media] Use an HTTPS YouTube, Twitch or "
+                        "Kick video/channel URL");
       return;
     }
     req.id = ++epoch;
@@ -244,7 +281,13 @@ struct Source {
                         "-J"};
     args << "--no-js-runtimes" << "--js-runtimes"
          << (engine.engine + ":" + engine.js);
-    args << "--" << r.url;
+    auto provider = mediaProvider(r.url);
+    auto twitch = canonicalProviderUrl(r.url);
+    if (provider != MediaProvider::YouTube) {
+      // Disable the generic/other-site extractors for this trusted route.
+      args << "--use-extractors" << providerExtractor(twitch);
+    }
+    args << "--" << (provider != MediaProvider::YouTube ? twitch : r.url);
     QProcess p;
     p.setProgram(engine.extractor);
     blog(LOG_INFO, "[streaming-media] Media engine: %s (%s)",
@@ -281,24 +324,73 @@ struct Source {
       return m;
     }
     QHash<QString, QByteArray> snapshots;
+    bool finiteHls = providerExtractor(twitch) == "twitch:vod" ||
+                     providerExtractor(twitch) == "kick:vod" ||
+                     providerExtractor(twitch) == "kick:clip";
+    if (provider != MediaProvider::YouTube &&
+        QJsonDocument::fromJson(output)
+                .object()
+                .value("extractor_key")
+                .toString() != providerExtractorKey(twitch)) {
+      m.error = "Unexpected provider extractor";
+      return m;
+    }
     bool live =
         QJsonDocument::fromJson(output).object().value("is_live").toBool();
-    auto selected =
-        selectMedia(output, r.height, [&](const QString &url, bool hls) {
+    if (finiteHls && live) {
+      m.error = "Recording is still live; use the channel URL";
+      return m;
+    }
+    auto selected = selectMedia(
+        output, r.height,
+        [&](const QString &url, bool hls) {
           if (closing || epoch != r.id ||
               std::chrono::steady_clock::now() > deadline)
             return false;
-          auto body = probeMediaHttps(url, hls, deadline,
-                                      [&] { return closing || epoch != r.id; });
+          QString effective;
+          auto body = probeMediaHttps(
+              url, hls, deadline, [&] { return closing || epoch != r.id; },
+              provider, &effective);
           if (!hls)
-            return !body.isEmpty();
+            return provider == MediaProvider::Twitch
+                       ? body.size() >= 12 && body.mid(4, 4) == "ftyp"
+                       : !body.isEmpty();
+          if (finiteHls) {
+            auto snapshot = normalizeFinitePlaylist(body, effective, provider);
+            if (snapshot.isEmpty())
+              return false;
+            snapshots.insert(url, snapshot);
+            return true;
+          }
+          if (provider != MediaProvider::YouTube)
+            return live && validLivePlaylist(body, provider);
           if (live)
             return body.startsWith("#EXTM3U");
           if (!validVodPlaylist(body))
             return false;
           snapshots.insert(url, body);
           return true;
-        });
+        },
+        provider);
+    if (finiteHls && selected.error.isEmpty()) {
+      auto snapshot = snapshots.value(selected.direct);
+      if (snapshot.contains("#EXT-X-MAP:") ||
+          providerExtractor(twitch) == "kick:vod") {
+        auto slice = sliceFinitePlaylist(snapshot, r.resumeMs,
+                                         provider == MediaProvider::Kick);
+        if (slice.manifest.isEmpty()) {
+          selected.error = "Unsupported indexed HLS playlist";
+          return selected;
+        }
+        snapshot = slice.manifest;
+        selected.segmentVod = true;
+        selected.segmentStartMs = slice.startMs;
+        selected.segmentDurationMs = slice.durationMs;
+      }
+      selected.manifest = QString::fromUtf8(snapshot);
+      if (selected.manifest.isEmpty())
+        selected.error = "No validated finite HLS playlist";
+    }
     if (!selected.live) {
       selected.videoPlaylist = snapshots.value(selected.videoUrl);
       selected.audioPlaylist = snapshots.value(selected.audioUrl);
@@ -373,7 +465,7 @@ struct Source {
     QString status;
     if (!enabled)
       status = "disabled";
-    else if (url.size() > 2048 || videoId(url).isEmpty())
+    else if (url.size() > 2048 || canonicalMediaUrl(url).isEmpty())
       status = "invalid_url";
     else {
       std::lock_guard<std::mutex> l(s->mutex);
@@ -445,6 +537,113 @@ struct Source {
     calldata_set_int(call, "width", s->videoWidth.load());
     calldata_set_int(call, "height", s->videoHeight.load());
   }
+  void destroyPreviewGraphics() {
+    if (previewStage)
+      gs_stagesurface_destroy(previewStage);
+    if (previewRender)
+      gs_texrender_destroy(previewRender);
+    previewStage = nullptr;
+    previewRender = nullptr;
+    capturePhase = 0;
+    captureGeneration = 0;
+  }
+  void capturePreview() {
+    const auto gen = epoch.load();
+    const auto now = nowMs();
+    if (capturePhase && (captureGeneration != gen || !accept || resumeGate ||
+                         previewRequest.load() != gen ||
+                         now - previewRequestTime.load() > 2000)) {
+      obs_enter_graphics();
+      destroyPreviewGraphics();
+      obs_leave_graphics();
+    }
+    if (!accept || resumeGate || closing || !gen ||
+        previewRequest.load() != gen ||
+        now - previewRequestTime.load() > 2000 || now < previewRetryAt)
+      return;
+    {
+      std::lock_guard<std::mutex> lock(previewMutex);
+      if (previewGeneration == gen)
+        return;
+    }
+    obs_enter_graphics();
+    if (capturePhase == 0) {
+      auto w = videoWidth.load(), h = videoHeight.load();
+      captureSize = previewSize(w, h);
+      if (validPreviewSize(captureSize)) {
+        previewRender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+        previewStage = gs_stagesurface_create(captureSize.width(),
+                                              captureSize.height(), GS_RGBA);
+        if (previewRender && previewStage &&
+            gs_texrender_begin(previewRender, captureSize.width(),
+                               captureSize.height())) {
+          vec4 zero;
+          vec4_zero(&zero);
+          gs_clear(GS_CLEAR_COLOR, &zero, 0.0f, 0);
+          gs_ortho(0, float(w), 0, float(h), -100, 100);
+          gs_blend_state_push();
+          gs_blend_function(GS_BLEND_ONE, GS_BLEND_ZERO);
+          obs_source_video_render(child);
+          gs_blend_state_pop();
+          gs_texrender_end(previewRender);
+          captureGeneration = gen;
+          capturePhase = 1;
+        } else {
+          destroyPreviewGraphics();
+          previewRetryAt = now + 1000;
+        }
+      }
+    } else if (capturePhase == 1) {
+      gs_stage_texture(previewStage, gs_texrender_get_texture(previewRender));
+      capturePhase = 2;
+    } else {
+      uint8_t *pixels = nullptr;
+      uint32_t stride = 0;
+      QImage image;
+      if (gs_stagesurface_map(previewStage, &pixels, &stride)) {
+        image = copyPreviewFrame(pixels, stride, captureSize);
+        gs_stagesurface_unmap(previewStage);
+      }
+      destroyPreviewGraphics();
+      previewRetryAt = now + 1000;
+      if (visiblePreviewFrame(image) && epoch == gen && accept && !resumeGate) {
+        std::lock_guard<std::mutex> lock(previewMutex);
+        capturedPreview = std::move(image);
+        previewGeneration = gen;
+      }
+    }
+    obs_leave_graphics();
+  }
+  static void previewProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    auto gen = s->epoch.load();
+    calldata_set_int(call, "generation", gen);
+    if (!s->accept || s->resumeGate || !s->videoWidth || !s->videoHeight)
+      return;
+    s->previewRequestTime = nowMs();
+    s->previewRequest = gen;
+    QImage image;
+    {
+      std::lock_guard<std::mutex> lock(s->previewMutex);
+      if (s->previewGeneration != gen ||
+          calldata_int(call, "seen") == int64_t(gen))
+        return;
+      image = s->capturedPreview;
+    }
+    if (s->epoch != gen || !s->accept || s->resumeGate || image.isNull())
+      return;
+    QByteArray raw(reinterpret_cast<const char *>(image.constBits()),
+                   image.sizeInBytes());
+    auto encoded = raw.toBase64();
+    calldata_set_int(call, "width", image.width());
+    calldata_set_int(call, "height", image.height());
+    calldata_set_string(call, "pixels", encoded.constData());
+  }
+  static void infoProc(void *data, calldata_t *call) {
+    auto s = static_cast<Source *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex);
+    calldata_set_string(call, "json", qPrintable(s->mediaInfo));
+  }
   void processQueue() {
     std::deque<QueueCommand> local;
     {
@@ -458,14 +657,41 @@ struct Source {
       auto st = obs_source_media_get_state(child);
       auto pos = obs_source_media_get_time(child),
            dur = obs_source_media_get_duration(child);
+      dur = kickClipDuration(dur, kickClipReportedDuration.load());
       bool endSignal = decoderEnded.exchange(false);
-      if (resumeGate && !endSignal && st == OBS_MEDIA_STATE_PLAYING &&
-          pos > 0 && dur > 0 && videoWidth > 0) {
+      if (finiteHlsClock) {
+        if (!endSignal && st == OBS_MEDIA_STATE_PLAYING && videoWidth > 0 &&
+            vodClock.observe(pos))
+          blog(LOG_DEBUG, "[streaming-media] Finite HLS timestamp origin: %lld",
+               (long long)pos);
+        pos = vodClock.position(pos);
+        if (segmentVod) {
+          if (vodClock.ready())
+            pos += segmentStart.load();
+          dur = segmentDuration.load();
+          if (vodClock.ready() && st == OBS_MEDIA_STATE_PLAYING &&
+              videoWidth > 0 && resumeGate && !endSignal) {
+            resumeGate = false;
+            resumeTarget = 0;
+            resumeIssued = false;
+            segmentSeeking = false;
+            blog(LOG_DEBUG, "[streaming-media] VOD segment start %lld",
+                 (long long)segmentStart.load());
+            if (segmentPaused)
+              obs_source_media_play_pause(child, true);
+          }
+        }
+      }
+      if (!segmentVod && resumeGate && !endSignal &&
+          st == OBS_MEDIA_STATE_PLAYING && pos > 0 && dur > 0 &&
+          videoWidth > 0) {
         if (!resumeIssued) {
           resumeTarget = std::clamp<int64_t>(resumeTarget, 0,
                                              std::max<int64_t>(0, dur - 1000));
           progress.seek(resumeTarget);
-          obs_source_media_set_time(child, resumeTarget);
+          obs_source_media_set_time(child, finiteHlsClock
+                                               ? vodClock.target(resumeTarget)
+                                               : resumeTarget);
           resumeIssued = true;
           resumeDeadline = nowMs() + 18000;
         } else if (std::abs(pos - resumeTarget) <= 2000) {
@@ -566,8 +792,9 @@ struct Source {
         q = MediaQueue{};
       else if (c.op == "autoplay")
         autoAdvance = c.target != 0;
-      else if (c.op == "load" && !videoId(c.url).isEmpty()) {
-        url = c.url;
+      else if (c.op == "load" && !canonicalMediaUrl(c.url).isEmpty()) {
+        auto twitch = canonicalProviderUrl(c.url);
+        url = twitch.isEmpty() ? c.url : twitch;
         load = true;
       } else if (c.op == "play" && matches()) {
         url = q.take(c.row);
@@ -614,6 +841,19 @@ struct Source {
       loading = false;
     }
     processQueue();
+    capturePreview();
+    std::optional<std::pair<uint64_t, int64_t>> seekRequest;
+    Request seekReq;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      seekRequest = pendingSegmentSeek;
+      pendingSegmentSeek.reset();
+      seekReq = current;
+    }
+    if (seekRequest && seekRequest->first == epoch && segmentVod && accept) {
+      seekReq.resumeMs = seekRequest->second;
+      queue(seekReq, false, true);
+    }
     if (auto attempt = recovery.take(nowMs())) {
       Request req;
       {
@@ -692,14 +932,24 @@ struct Source {
     auto settings = obs_data_create();
     obs_data_set_bool(settings, "is_local_file", false);
     obs_data_set_string(settings, "input", qPrintable(input));
+    auto twitch = mediaProvider(r->req.url) != MediaProvider::YouTube;
     obs_data_set_string(settings, "input_format",
-                        r->media.manifest.isEmpty() ? "" : "hls");
+                        twitch && !r->media.hlsDirect ? "mov"
+                        : r->media.manifest.isEmpty() && !r->media.hlsDirect
+                            ? ""
+                            : "hls");
     obs_data_set_string(settings, "ffmpeg_options",
-                        r->media.manifest.isEmpty()
+                        mediaProvider(r->req.url) != MediaProvider::YouTube
+                            ? (r->media.manifest.isEmpty()
+                                   ? "protocol_whitelist=https,tcp,tls,crypto"
+                                   : "protocol_whitelist=file,https,tcp,tls "
+                                     "allowed_extensions=ts,mp4,m3u8")
+                        : r->media.manifest.isEmpty()
                             ? ""
                             : "protocol_whitelist=file,http,https,tcp,tls,"
                               "crypto allowed_extensions=ALL");
-    obs_data_set_bool(settings, "seekable", !r->media.live);
+    obs_data_set_bool(settings, "seekable",
+                      !r->media.live && !r->media.segmentVod);
     obs_data_set_bool(settings, "restart_on_activate", false);
     obs_data_set_bool(settings, "close_when_inactive", false);
     obs_data_set_bool(settings, "clear_on_media_end", true);
@@ -714,8 +964,20 @@ struct Source {
     {
       std::lock_guard<std::mutex> l(mutex);
       title = r->media.title;
+      mediaInfo = QString::fromUtf8(
+          QJsonDocument(r->media.info).toJson(QJsonDocument::Compact));
       error.clear();
     }
+    kickClipReportedDuration =
+        providerExtractor(r->req.url) == "kick:clip"
+            ? qint64(r->media.info.value("durationMs").toDouble(0))
+            : 0;
+    segmentVod = r->media.segmentVod;
+    segmentStart = r->media.segmentStartMs;
+    segmentDuration = r->media.segmentDurationMs;
+    finiteHlsClock = providerExtractor(r->req.url) == "twitch:vod" ||
+                     providerExtractor(r->req.url) == "kick:vod" ||
+                     providerExtractor(r->req.url) == "kick:clip";
     sessionLive = r->media.live;
     if (sessionLive) {
       resumeGate = false;
@@ -723,9 +985,11 @@ struct Source {
     }
     decoderEnded = false;
     failed = false;
-    blog(LOG_INFO, "[streaming-media] YouTube media resolved (%s, %s)",
+    blog(LOG_INFO, "[streaming-media] Media resolved (%s, %s)",
          r->media.live ? "live" : "VOD",
-         r->media.manifest.isEmpty() ? "combined" : "adaptive HLS");
+         r->media.segmentVod           ? "indexed HLS"
+         : r->media.manifest.isEmpty() ? "combined"
+                                       : "HLS playlist");
   }
   void update(obs_data_t *d) {
     Request r;
@@ -760,7 +1024,7 @@ struct Source {
     queue(r);
   }
 };
-const char *name(void *) { return "Streaming Media (YouTube)"; }
+const char *name(void *) { return "Streaming Media"; }
 void defaults(obs_data_t *s) {
   obs_data_set_default_int(s, "height", 1080);
   obs_data_set_default_bool(s, "hw", true);
@@ -775,7 +1039,7 @@ void defaults(obs_data_t *s) {
 obs_properties_t *properties(void *) {
   auto p = obs_properties_create();
   obs_properties_set_flags(p, OBS_PROPERTIES_DEFER_UPDATE);
-  obs_properties_add_text(p, "url", "YouTube URL", OBS_TEXT_DEFAULT);
+  obs_properties_add_text(p, "url", "Media URL", OBS_TEXT_DEFAULT);
   auto q = obs_properties_add_list(p, "height", "Maximum resolution",
                                    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
   for (auto h : {360, 480, 720, 1080, 1440, 2160}) {
@@ -832,6 +1096,12 @@ void *create(obs_data_t *settings, obs_source_t *parent) {
                    "error, out int width, out int height)",
                    Source::statusProc, s);
   proc_handler_add(proc,
+                   "void streaming_media_preview(int seen, out int generation, "
+                   "out int width, out int height, out string pixels)",
+                   Source::previewProc, s);
+  proc_handler_add(proc, "void streaming_media_info(out string json)",
+                   Source::infoProc, s);
+  proc_handler_add(proc,
                    "void streaming_media_submit(string url, out string "
                    "requestId, out string status)",
                    Source::submitProc, s);
@@ -886,19 +1156,39 @@ enum obs_media_state state(void *p) {
 }
 int64_t duration(void *p) {
   auto s = self(p);
-  return s->accept ? obs_source_media_get_duration(s->child)
-                   : s->finalDuration.load();
+  if (!s->accept)
+    return s->finalDuration.load();
+  return s->segmentVod
+             ? s->segmentDuration.load()
+             : kickClipDuration(obs_source_media_get_duration(s->child),
+                                s->kickClipReportedDuration.load());
 }
 int64_t time(void *p) {
   auto s = self(p);
-  return s->accept ? obs_source_media_get_time(s->child)
-                   : s->finalDuration.load();
+  if (!s->accept)
+    return s->finalDuration.load();
+  auto raw = obs_source_media_get_time(s->child);
+  return s->finiteHlsClock
+             ? s->vodClock.position(raw) + (s->segmentVod && s->vodClock.ready()
+                                                ? s->segmentStart.load()
+                                                : 0)
+             : raw;
 }
 void seek(void *p, int64_t ms) {
   auto s = self(p);
-  if (s->accept && !s->resumeGate) {
+  if (s->accept && !s->resumeGate &&
+      (!s->finiteHlsClock || s->vodClock.ready())) {
+    if (s->segmentVod) {
+      std::lock_guard<std::mutex> lock(s->mutex);
+      s->pendingSegmentSeek = std::make_pair(
+          s->epoch.load(),
+          std::clamp<int64_t>(ms, 0,
+                              std::max<int64_t>(0, s->segmentDuration - 1)));
+      return;
+    }
     s->progress.seek(ms);
-    obs_source_media_set_time(s->child, ms);
+    obs_source_media_set_time(s->child,
+                              s->finiteHlsClock ? s->vodClock.target(ms) : ms);
   }
 }
 void restart(void *p) { self(p)->reload(); }
@@ -906,6 +1196,10 @@ void stop(void *p) { self(p)->cancel(); }
 void next(void *p) { self(p)->enqueue({"next", {}, -1, -1}); }
 void pause(void *p, bool paused) {
   auto s = self(p);
+  if (s->segmentVod || s->segmentSeeking)
+    s->segmentPaused = paused;
+  if (s->segmentSeeking && (!s->accept || s->resumeGate))
+    return;
   if (s->accept && !s->resumeGate)
     obs_source_media_play_pause(s->child, paused);
   else if (!paused && !s->loading && !s->resumeGate)

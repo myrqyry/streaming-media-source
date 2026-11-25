@@ -1,4 +1,5 @@
 #include "media-dock.hpp"
+#include "preview-frame.hpp"
 #include "runtime-update.hpp"
 #include <QAction>
 #include <QApplication>
@@ -42,6 +43,31 @@ int main(int argc, char **argv) {
   fflush(stderr);
   QApplication app(argc, argv);
   qInfo() << "dock-theme-test: platform" << app.platformName();
+  check(previewSize(1920, 1080) == QSize(320, 180), "landscape preview");
+  check(previewSize(1080, 1920) == QSize(101, 180), "portrait preview");
+  check(previewSize(0, 1080).isEmpty(), "invalid source dimensions");
+  QByteArray padded(32, 0);
+  padded[0] = char(255);
+  padded[16 + 1] = char(255);
+  auto captured = copyPreviewFrame(
+      reinterpret_cast<const uint8_t *>(padded.constData()), 16, QSize(2, 2));
+  check(!captured.isNull() && captured.pixelColor(0, 0) == QColor(Qt::red) &&
+            captured.pixelColor(0, 1) == QColor(Qt::green),
+        "RGBA staging stride and color");
+  check(copyPreviewFrame(reinterpret_cast<const uint8_t *>(padded.constData()),
+                         4, QSize(2, 2))
+            .isNull(),
+        "reject invalid stride");
+  check(decodePreviewFrame(QByteArray(15, 0).toBase64(), 2, 2).isNull(),
+        "reject malformed payload");
+  check(decodePreviewFrame(QByteArray(16, 0).toBase64(), 321, 2).isNull(),
+        "reject oversized preview");
+  auto decoded = decodePreviewFrame(
+      QByteArray(reinterpret_cast<const char *>(captured.constBits()),
+                 captured.sizeInBytes())
+          .toBase64(),
+      2, 2);
+  check(decoded == captured, "preview round trip");
   QTemporaryDir tmp;
   check(tmp.isValid(), "temporary test directory");
   check(obs_startup("en-US", qPrintable(tmp.path()), nullptr), "OBS startup");

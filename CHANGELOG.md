@@ -3,6 +3,41 @@
 This log describes development checkpoints. No public release has been
 published.
 
+## Unreleased — Twitch and Kick providers
+
+- Version-pinned OBS 32.2.0/33.0.3 SDK matrix across Linux, Windows and
+  both macOS architectures, with version-specific packaging and SDK
+  patches. OBS 32 local regression and both package layouts verified;
+  actual OBS 33 native build/playback qualification pending.
+
+- Public Twitch live channels, clips and completed VODs, sharing the existing native
+  decoder, mixer routing and mixed-provider queue.
+- Provider-specific URL/extractor and CDN validation, canonical Twitch
+  channel/clip identities, bounded HTTPS preflight and live HLS checks.
+- Source name becomes Streaming Media; the persisted source ID is unchanged.
+- Verified isolated Linux OBS playback for a public live channel and clip.
+  Offline polling and audio-only mode remain future work.
+- Reuse normalized extractor metadata for the current item and enrich
+  visible Twitch queue items with independent bounded lookups, including
+  thumbnails, channel/category, duration, optional counts and details.
+- Completed Twitch VODs: validated finite TS/fMP4 HLS snapshots, relative
+  timeline, native TS seeks and segment-indexed fMP4 seeks. Real nine-hour
+  recordings tested in both formats, including EOF-driven queue advancement.
+- Real live/clip cross-queue smoke tests confirmed current and queued
+  thumbnails and metadata while mixer audio continued.
+
+- Kick live channels, completed UUID VODs and clip URLs use exact extractor
+  routes, provider-specific CDN validation, normalized finite HLS including
+  explicit byte ranges, and shared native transport and queue metadata.
+- Kick live concurrent viewer counts and clip thumbnails when provided;
+  unavailable live/recording thumbnails remain absent. Clip duration
+  reconciliation handles a bounded segment-padding discrepancy. Indexed
+  Kick VOD seeking and actual clip/VOD natural-end advancement verified.
+
+- Generate current-media previews from the existing native decoder,
+  using bounded aspect-preserving readback and reusing captured stills
+  for matching queue entries without another media download.
+
 ## 0.6.0 — Playlist imports
 
 - Import supported public YouTube playlists through the existing dock's

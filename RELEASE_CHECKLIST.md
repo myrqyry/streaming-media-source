@@ -28,7 +28,9 @@ Before a first public release:
   The extracted archive has passed real playback with an empty PATH on the
   development machine; cross-distro ABI qualification is still required.
   Current qualified target is native Linux OBS 32.x; Windows/macOS
-  native build qualification is in progress, Flatpak is unqualified. Keep the
+  native build/test/package qualification passed on merged CI baseline;
+  current provider changes and live playback still require native verification.
+  Flatpak is unqualified. Keep the
   source ID and install module name stable across repository renames.
 - Run deterministic CTest plus real playback, queue, injected decoder
   recovery, source resizing, WebSocket and source teardown verification.
@@ -50,3 +52,10 @@ Before a first public release:
 The repository was previously private and its existing history is now
 public. Review any historical development notes for sensitive information.
 No release binaries should be published until the remaining gates are met.
+
+- OBS 33.0.3: verify all eight OBS 32/33 matrix jobs on the current provider
+  branch, then exercise native module loading, real playback, queueing,
+  generated thumbnails, mixer audio and clean teardown on the intended
+  hosts. Validate modern install discovery and removal of duplicate legacy
+  copies. Keep binaries built against OBS 33 out of OBS 32 installations.
+  The SDK pins and layout verification alone do not establish compatibility.

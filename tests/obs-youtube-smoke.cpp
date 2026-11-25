@@ -191,8 +191,17 @@ int main(int argc, char **argv) {
           audio.load(), mixed.load(), obs_source_media_get_state(s),
           (long long)obs_source_media_get_time(s),
           (long long)obs_source_media_get_duration(s));
+  const auto kickMode = qEnvironmentVariable("SMOKE_KICK");
+  const bool liveMode =
+      qEnvironmentVariableIntValue("SMOKE_TWITCH_LIVE") != 0 ||
+      kickMode == "live";
+  const bool clipMode =
+      qEnvironmentVariableIntValue("SMOKE_TWITCH_CLIP") != 0 ||
+      kickMode == "clip";
+  const bool vodMode = qEnvironmentVariableIntValue("SMOKE_TWITCH_VOD") != 0 ||
+                       kickMode == "vod";
   bool pause = false, seek = false, resume = false;
-  if (playing) {
+  if (playing && !liveMode) {
     obs_source_media_play_pause(s, true);
     until(3, [&] {
       return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED;
@@ -202,11 +211,12 @@ int main(int argc, char **argv) {
     auto after = obs_source_media_get_time(s);
     pause = obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED &&
             std::abs(after - before) < 300;
-    obs_source_media_set_time(s, 45000);
+    auto target = vodMode ? 120000 : clipMode ? 10000 : 45000;
+    obs_source_media_set_time(s, target);
     obs_source_media_play_pause(s, false);
     seek = until(18, [&] {
       auto t = obs_source_media_get_time(s);
-      return t >= 44000 && t < 65000;
+      return t >= target - 1000 && t < target + 20000;
     });
     auto n = mixed.load();
     resume = until(8, [&] { return mixed > n + 10; });
@@ -239,11 +249,173 @@ int main(int argc, char **argv) {
       widgetReady && until(8, [&] { return !thumb->pixmap().isNull(); });
   fprintf(stderr, "DOCK widgets=%d thumbnail=%d\n", widgetReady,
           thumbnailReady);
-  if (widgetReady)
+  const bool generatedMode =
+      qEnvironmentVariableIntValue("SMOKE_GENERATED_PREVIEW") != 0;
+  bool generatedPass = !generatedMode;
+  if (generatedMode && widgetReady && playing) {
+    const auto before = mixed.load();
+    bool captured = until(8, [&] {
+      return thumb->property("generatedPreview").toBool() &&
+             !thumb->pixmap().isNull();
+    });
+    if (captured)
+      thumb->pixmap().save("build/generated-preview-smoke.png");
+    auto playingUrl = currentUrl(s);
+    entry->setText(playingUrl);
+    add->click();
+    bool cached = until(4, [&] {
+      return rows->count() == 1 && !rows->item(0)->icon().isNull();
+    });
+    bool audioContinued = until(4, [&] { return mixed > before + 10; });
+    generatedPass = captured && cached && audioContinued;
+    fprintf(stderr,
+            "GENERATED_PREVIEW captured=%d queue_cache=%d audio_continued=%d "
+            "pass=%d\n",
+            captured, cached, audioContinued, generatedPass);
+    queueCommand(s, "clear", "", -1, -1);
+    until(3, [&] { return queued(s).isEmpty(); });
+  }
+
+  if (widgetReady && !liveMode && !clipMode && !vodMode)
     dock->grab().save("build/dock-widget-preview.png");
   const bool recoveryMode = qEnvironmentVariableIntValue("SMOKE_RECOVERY") != 0;
   const bool importMode =
       qEnvironmentVariableIntValue("SMOKE_PLAYLIST_IMPORT") != 0;
+  bool livePass = false;
+  if (kickMode.isEmpty() && (liveMode || clipMode) && playing && widgetReady) {
+    const QString upcoming = liveMode
+                                 ? "https://clips.twitch.tv/"
+                                   "HyperWimpyCourgetteLitty-FgZ8Z7UWKlWBjo2e"
+                                 : "https://www.twitch.tv/lofigirl";
+    auto author = dock->findChild<QLabel *>("media-author");
+    bool currentInfo =
+        author && author->text().contains("LofiGirl", Qt::CaseInsensitive) &&
+        title->toolTip().contains("Reported qualities");
+    entry->setText(upcoming);
+    add->click();
+    bool appended =
+        until(3, [&] { return queued(s) == QStringList{upcoming}; });
+    auto count = mixed.load();
+    bool queueInfo = until(22, [&] {
+      return rows->count() == 1 && !rows->item(0)->icon().isNull() &&
+             rows->item(0)->toolTip().contains("Channel: LofiGirl") &&
+             (clipMode || rows->item(0)->toolTip().contains("Category: Music"));
+    });
+    bool continued =
+        mixed > count + 15 || until(8, [&] { return mixed > count + 15; });
+    fprintf(stderr,
+            "MEDIA_INFO current=%d thumbnail=%d queue=%d continuing=%d\n",
+            currentInfo, thumbnailReady, queueInfo, continued);
+    if (currentInfo && thumbnailReady && queueInfo)
+      dock->grab().save(liveMode ? "build/twitch-live-info.png"
+                                 : "build/twitch-clip-info.png");
+    obs_source_media_stop(s);
+    bool stoppedLive = until(5, [&] {
+      return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+    });
+    livePass = currentInfo && thumbnailReady && queueInfo && appended &&
+               continued && stoppedLive && queued(s) == QStringList{upcoming};
+    fprintf(stderr,
+            "TWITCH_MEDIA queue=%d continuing=%d stop=%d preserved=%d\n",
+            appended, continued, stoppedLive, livePass);
+  }
+  bool vodPass = false;
+  if (kickMode.isEmpty() && vodMode && playing && pause && seek && resume &&
+      widgetReady) {
+    const QString defaultUpcoming =
+        QString::fromUtf8(argv[2]).endsWith("2928653119")
+            ? "https://www.twitch.tv/videos/2931942986"
+            : "https://www.twitch.tv/videos/2928653119";
+    const QString upcoming =
+        qEnvironmentVariable("SMOKE_TWITCH_VOD_NEXT", defaultUpcoming);
+    auto author = dock->findChild<QLabel *>("media-author");
+    auto durationLabel = dock->findChild<QLabel *>("media-queue-duration");
+    bool currentInfo = author && !author->text().isEmpty() &&
+                       title->toolTip().contains("Reported qualities");
+    entry->setText(upcoming);
+    add->click();
+    bool queuedVod =
+        until(3, [&] { return queued(s) == QStringList{upcoming}; });
+    bool queueInfo = until(25, [&] {
+      return rows->count() == 1 && !rows->item(0)->icon().isNull() &&
+             rows->item(0)->toolTip().contains("Channel:") && durationLabel &&
+             durationLabel->isVisible();
+    });
+    auto end = obs_source_media_get_duration(s);
+    queueCommand(s, "autoplay", "", -1, 1);
+    bool nearEnd = false, advanced = false, nextAudio = false;
+    if (end > 120000 && queuedVod) {
+      obs_source_media_set_time(s, end - 8000);
+      nearEnd = until(25, [&] {
+        auto t = obs_source_media_get_time(s);
+        return t >= end - 10000 && t < end;
+      });
+      advanced = until(
+          45, [&] { return currentUrl(s) == upcoming && queued(s).isEmpty(); });
+      auto n = mixed.load();
+      nextAudio =
+          advanced && until(45, [&] {
+            return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+                   obs_source_media_get_time(s) > 1000 &&
+                   obs_source_media_get_time(s) < 30000 && mixed > n + 15;
+          });
+    }
+    fprintf(stderr,
+            "VOD_INFO current=%d thumbnail=%d queued=%d metadata=%d "
+            "duration=%lld near_end=%d advanced=%d next_audio=%d\n",
+            currentInfo, thumbnailReady, queuedVod, queueInfo, (long long)end,
+            nearEnd, advanced, nextAudio);
+    vodPass = currentInfo && thumbnailReady && queuedVod && queueInfo &&
+              nearEnd && advanced && nextAudio;
+  }
+  bool kickPass = false;
+  if (!kickMode.isEmpty() && playing && widgetReady) {
+    const QString upcoming = qEnvironmentVariable(
+        "SMOKE_KICK_NEXT",
+        "https://kick.com/xqc/clips/clip_01M7QZ864DK0K76T3Q16X01S9B");
+    auto author = dock->findChild<QLabel *>("media-author");
+    bool info = author && !author->text().isEmpty();
+    bool liveCount = kickMode != "live" ||
+                     title->toolTip().contains("Viewers at resolution");
+    entry->setText(upcoming);
+    add->click();
+    bool appended =
+        until(3, [&] { return queued(s) == QStringList{upcoming}; });
+    auto n = mixed.load();
+    bool queueInfo = until(15, [&] {
+      return rows->count() == 1 &&
+             rows->item(0)->toolTip().contains("Channel:") &&
+             (!upcoming.contains("/clips/") || !rows->item(0)->icon().isNull());
+    });
+    bool continued = mixed > n + 10 || until(4, [&] { return mixed > n + 10; });
+    bool advanced = true;
+    if (!liveMode && qEnvironmentVariableIntValue("SMOKE_KICK_EOF")) {
+      queueCommand(s, "autoplay", "", -1, 1);
+      auto end = obs_source_media_get_duration(s);
+      obs_source_media_set_time(s, std::max<int64_t>(0, end - 8000));
+      advanced = until(
+          45, [&] { return currentUrl(s) == upcoming && queued(s).isEmpty(); });
+      auto before = mixed.load();
+      advanced =
+          advanced && until(30, [&] {
+            return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+                   mixed > before + 15;
+          });
+      fprintf(stderr, "KICK_EOF advanced=%d\n", advanced);
+    }
+    obs_source_media_stop(s);
+    bool stopped = until(5, [&] {
+      return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+    });
+    kickPass = info && liveCount && appended && queueInfo && continued &&
+               stopped && advanced && (kickMode != "clip" || thumbnailReady) &&
+               (liveMode || (pause && seek && resume));
+    fprintf(stderr,
+            "KICK mode=%s info=%d viewers=%d thumbnail=%d queued=%d "
+            "queue_info=%d continuing=%d stopped=%d pass=%d\n",
+            qPrintable(kickMode), info, liveCount, thumbnailReady, appended,
+            queueInfo, continued, stopped, kickPass);
+  }
   bool importPass = false;
   bool recoveryPass = false;
   bool queueEdit = false, nextPlayback = false, stopped = false,
@@ -253,8 +425,12 @@ int main(int argc, char **argv) {
     auto cancel = dock->findChild<QToolButton *>("media-import-cancel");
     auto total = dock->findChild<QLabel *>("media-queue-duration");
     auto playList = dock->findChild<QPushButton *>("media-url-play");
-    const QString link =
-        "https://www.youtube.com/playlist?list=UUSMOQeBJ2RAnuFungnQOxLg";
+    const QString link = qEnvironmentVariable(
+        "SMOKE_PLAYLIST_URL",
+        "https://www.youtube.com/playlist?list=UUSMOQeBJ2RAnuFungnQOxLg");
+    const int expected = qEnvironmentVariableIntValue("SMOKE_PLAYLIST_COUNT");
+    const int importedCount = expected > 0 ? std::min(expected + 1, 100) : 100;
+    const int playCount = expected > 0 ? std::min(expected, 100) : 100;
     const QString old = "https://youtu.be/jNQXAC9IVRw";
     auto start = currentUrl(s);
     queueCommand(s, "append", qPrintable(old));
@@ -274,7 +450,7 @@ int main(int argc, char **argv) {
     add->click();
     bool imported = until(55, [&] {
       return label && label->text().startsWith("Imported") &&
-             queued(s).size() == 100;
+             queued(s).size() == importedCount;
     });
     auto importedQueue = queued(s);
     bool uninterrupted =
@@ -282,7 +458,7 @@ int main(int argc, char **argv) {
         obs_source_media_get_time(s) > position &&
         obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING;
     bool metadata = until(5, [&] {
-      return rows->count() == 100 &&
+      return rows->count() == importedCount &&
              rows->item(1)->text() != videoId(importedQueue.value(1)) &&
              total && !total->text().isEmpty();
     });
@@ -303,7 +479,8 @@ int main(int argc, char **argv) {
     bool started = imported && until(55, [&] {
                      return label && label->text().contains("first selected") &&
                             currentUrl(s) == importedQueue.value(1) &&
-                            queued(s).size() == 100 && queued(s).last() == old;
+                            queued(s).size() == playCount &&
+                            queued(s).last() == old;
                    });
     auto settings = obs_source_get_settings(s);
     bool autoAdvance = obs_data_get_bool(settings, "auto_advance");
@@ -375,8 +552,8 @@ int main(int argc, char **argv) {
             reconnect, resumed, cancelled, preserved, (long long)oldPos);
     recoveryPass = reconnect && resumed && cancelled && preserved;
   }
-  if (!importMode && !recoveryMode && playing && pause && seek && resume &&
-      widgetReady) {
+  if (!liveMode && !clipMode && !vodMode && !importMode && !recoveryMode &&
+      playing && pause && seek && resume && widgetReady) {
     const char *other = "https://youtu.be/aqz-KE-bpKQ";
     const char *third = "https://youtu.be/jNQXAC9IVRw";
     entry->setText(third);
@@ -510,12 +687,21 @@ int main(int argc, char **argv) {
   obs_wait_for_destroy_queue();
   pump();
   obs_shutdown();
-  return dimensionQueries > 100 && released && playing && pause && seek &&
-                 resume && widgetReady &&
-                 (importMode ? importPass
-                  : recoveryMode
-                      ? recoveryPass
-                      : (queueEdit && nextPlayback && stopped && autoNext))
+  return dimensionQueries > 100 && released && playing && widgetReady &&
+                 generatedPass &&
+                 (!kickMode.isEmpty()
+                      ? kickPass
+                      : (vodMode
+                             ? vodPass
+                             : ((liveMode || clipMode)
+                                    ? (livePass &&
+                                       (!clipMode || (pause && seek && resume)))
+                                    : (pause && seek && resume &&
+                                       (importMode ? importPass
+                                        : recoveryMode
+                                            ? recoveryPass
+                                            : (queueEdit && nextPlayback &&
+                                               stopped && autoNext))))))
              ? 0
              : 1;
 }

@@ -3,6 +3,7 @@
 #include "media-runtime.hpp"
 #include "playlist-import.hpp"
 #include "playlist-metadata.hpp"
+#include "preview-frame.hpp"
 #include "runtime-update.hpp"
 #include <QApplication>
 #include <QBuffer>
@@ -25,6 +26,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QMenu>
 #include <QMimeData>
 #include <QNetworkAccessManager>
@@ -65,6 +67,52 @@ QString clockText(int64_t ms) {
                    .arg(sec / 60 % 60, 2, 10, QChar('0'))
                    .arg(sec % 60, 2, 10, QChar('0'))
              : QString("%1:%2").arg(sec / 60).arg(sec % 60, 2, 10, QChar('0'));
+}
+QString infoTooltip(const QJsonObject &info) {
+  QStringList lines;
+  auto add = [&](const QString &label, const QString &value) {
+    if (!value.isEmpty())
+      lines << label.toHtmlEscaped() + ": " + value.toHtmlEscaped();
+  };
+  add("Channel", info.value("author").toString());
+  add("Uploaded by", info.value("uploader").toString());
+  add("Category", info.value("category").toString());
+  add("Date (UTC)", info.value("date").toString());
+  for (const auto &pair :
+       {std::pair<const char *, const char *>{"views", "Views"},
+        {"viewers", "Viewers at resolution"},
+        {"likes", "Likes"},
+        {"followers", "Channel followers"},
+        {"comments", "Comments"}}) {
+    if (info.contains(pair.first))
+      add(pair.second,
+          QLocale().toString(qint64(info.value(pair.first).toDouble())));
+  }
+  QStringList qualities;
+  for (auto h : info.value("resolutions").toArray())
+    qualities << QString::number(h.toInt()) + "p";
+  add("Reported qualities", qualities.join(", "));
+  add("Description", info.value("description").toString());
+  return lines.join("<br>");
+}
+QString cacheKey(const QString &url) {
+  auto twitch = canonicalProviderUrl(url);
+  return twitch.isEmpty() ? videoId(url) : twitch;
+}
+QImage decodeThumbnail(const QByteArray &bytes, QSize target) {
+  QBuffer buffer;
+  buffer.setData(bytes);
+  buffer.open(QIODevice::ReadOnly);
+  QImageReader reader(&buffer);
+  auto format = reader.format().toLower();
+  if (format != "jpeg" && format != "png" && format != "webp")
+    return {};
+  auto size = reader.size();
+  if (!size.isValid() || size.width() > 1920 || size.height() > 1920 ||
+      qint64(size.width()) * size.height() > 1920 * 1080)
+    return {};
+  reader.setScaledSize(size.scaled(target, Qt::KeepAspectRatio));
+  return reader.read();
 }
 QString stateText(enum obs_media_state state) {
   switch (state) {
@@ -236,11 +284,14 @@ public:
 struct CachedPlaylistItem {
   PlaylistMetadata metadata;
   QImage image;
-  bool titleDone = false, imageDone = false;
+  bool titleDone = false, imageDone = false, generated = false;
 };
 class MediaDock : public QWidget {
   QVBoxLayout *mainLayout = nullptr;
   QProcess *importProcess = nullptr;
+  QProcess *metadataProcess = nullptr;
+  QByteArray metadataBytes;
+  bool metadataOverflow = false;
   QLabel *importStatus = nullptr;
   QToolButton *importCancel = nullptr;
   QByteArray importBytes;
@@ -270,7 +321,7 @@ class MediaDock : public QWidget {
     qint64 total = 0;
     int known = 0;
     for (auto &u : queueUrls) {
-      auto cached = playlistCache.object(videoId(u));
+      auto cached = playlistCache.object(cacheKey(u));
       if (cached && cached->metadata.durationMs >= 0) {
         total += cached->metadata.durationMs;
         ++known;
@@ -487,10 +538,13 @@ class MediaDock : public QWidget {
   }
 
   QImage previewImage;
+  qint64 seenPreviewGeneration = 0;
+  QElapsedTimer previewWait;
   bool themeRefreshPending = false, themeReady = false;
   QComboBox *sources;
   QLineEdit *url;
-  QLabel *thumbnail, *title, *status, *time, *count, *queueDuration;
+  QLabel *thumbnail, *title, *status, *mediaAuthor, *time, *count,
+      *queueDuration;
   QSlider *timeline;
   QToolButton *play, *stop, *back, *forward, *next, *retry, *up, *down, *remove;
   QPushButton *load, *append;
@@ -634,10 +688,10 @@ class MediaDock : public QWidget {
       else
         action(immediate ? "load" : "append",
                "https://www.youtube.com/watch?v=" + id);
-    } else if (!id.isEmpty()) {
+    } else if (!canonicalMediaUrl(value).isEmpty()) {
       action(immediate ? "load" : "append", value);
     } else {
-      url->setToolTip("Enter a valid HTTPS YouTube video or playlist URL");
+      url->setToolTip("Enter a YouTube, Twitch or Kick media URL");
       url->setFocus();
       return;
     }
@@ -679,10 +733,21 @@ class MediaDock : public QWidget {
     if (idx >= 0)
       sources->setCurrentIndex(idx);
   }
-  void preview(const QString &id) {
-    if (id == thumbId)
-      return;
+  void preview(const QString &id, const QString &imageUrl = {},
+               bool preferFrame = false) {
+    if (id == thumbId) {
+      if (!preferFrame && previewWait.isValid() &&
+          previewWait.elapsed() > 5000 && previewImage.isNull() &&
+          !thumbnailReply) {
+        thumbId.clear();
+      } else
+        return;
+    }
     thumbId = id;
+    seenPreviewGeneration = 0;
+    previewWait.invalidate();
+    thumbnail->setProperty("generatedPreview", false);
+    thumbnail->setToolTip({});
     if (thumbnailReply) {
       auto old = thumbnailReply.data();
       thumbnailReply = nullptr;
@@ -691,11 +756,20 @@ class MediaDock : public QWidget {
     }
     previewImage = QImage{};
     thumbnail->setPixmap({});
+    bool external = id.startsWith("provider:");
+    auto provider = external ? mediaProvider(id.mid(9).section('|', 0, 0))
+                             : MediaProvider::YouTube;
     thumbnail->setText(id.isEmpty() ? "No video" : "Preview unavailable");
-    if (id.isEmpty() || !isVisible())
+    if (preferFrame) {
+      previewWait.start();
+      return;
+    }
+    if (id.isEmpty() || !isVisible() ||
+        (external && !validThumbnailUrl(imageUrl, provider)))
       return;
     QNetworkRequest request(
-        QUrl("https://i.ytimg.com/vi/" + id + "/mqdefault.jpg"));
+        QUrl(external ? imageUrl
+                      : "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg"));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::ManualRedirectPolicy);
     request.setTransferTimeout(8000);
@@ -712,34 +786,79 @@ class MediaDock : public QWidget {
         if (id == thumbId && reply->error() == QNetworkReply::NoError &&
             reply->bytesAvailable() <= 1024 * 1024) {
           auto bytes = reply->readAll();
-          QBuffer buffer(&bytes);
-          buffer.open(QIODevice::ReadOnly);
-          QImageReader reader(&buffer, "JPEG");
-          auto size = reader.size();
-          if (size.isValid() && size.width() <= 1920 && size.height() <= 1080) {
-            reader.setScaledSize(
-                size.scaled(QSize(320, 180), Qt::KeepAspectRatio));
-            auto image = reader.read();
-            if (!image.isNull()) {
-              thumbnail->setText({});
-              previewImage = image;
-              scalePreview();
-            }
+          auto image = decodeThumbnail(bytes, QSize(320, 180));
+          if (!image.isNull()) {
+            thumbnail->setText({});
+            previewImage = image;
+            scalePreview();
           }
         }
       }
       reply->deleteLater();
     });
   }
+  void generatedPreview(obs_source_t *source, const QString &current) {
+    if (!isVisible() || current.isEmpty())
+      return;
+    calldata_t call;
+    calldata_init(&call);
+    calldata_set_int(&call, "seen", seenPreviewGeneration);
+    proc_handler_call(obs_source_get_proc_handler(source),
+                      "streaming_media_preview", &call);
+    auto gen = calldata_int(&call, "generation");
+    auto raw = calldata_string(&call, "pixels");
+    auto image = raw ? decodePreviewFrame(QByteArray(raw),
+                                          int(calldata_int(&call, "width")),
+                                          int(calldata_int(&call, "height")))
+                     : QImage{};
+    calldata_free(&call);
+    if (gen != seenPreviewGeneration && seenPreviewGeneration) {
+      // A reload of the same URL must not be mistaken for an already
+      // captured generation. Keep the old still while new media opens.
+      seenPreviewGeneration = 0;
+    }
+    if (image.isNull())
+      return;
+    seenPreviewGeneration = gen;
+    previewWait.invalidate();
+    if (thumbnailReply) {
+      auto old = thumbnailReply.data();
+      thumbnailReply = nullptr;
+      old->abort();
+      old->deleteLater();
+    }
+    previewImage = image;
+    thumbnail->setText({});
+    thumbnail->setProperty("generatedPreview", true);
+    thumbnail->setToolTip("Preview captured from playback");
+    scalePreview();
+    auto key = cacheKey(current);
+    if (!key.isEmpty()) {
+      auto cached = playlistCache.object(key);
+      if (!cached) {
+        cached = new CachedPlaylistItem;
+        playlistCache.insert(key, cached);
+      }
+      cached->image =
+          image.scaled(160, 90, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+      cached->imageDone = true;
+      cached->generated = true;
+      refreshQueueMetadata(key);
+    }
+  }
   void decorateQueueItem(QListWidgetItem *item) {
     auto u = item->data(UrlRole).toString();
-    auto id = videoId(u);
+    auto id = cacheKey(u);
     auto cached = playlistCache.object(id);
     auto title = cached && !cached->metadata.title.isEmpty()
                      ? cached->metadata.title
-                     : id;
+                     : mediaLabel(u);
     item->setText(title);
-    auto author = cached ? cached->metadata.author : QString{};
+    auto author = cached ? cached->metadata.author
+                  : mediaProvider(u) == MediaProvider::Twitch
+                      ? QString("Twitch")
+                  : mediaProvider(u) == MediaProvider::Kick ? QString("Kick")
+                                                            : QString{};
     if (cached && cached->metadata.durationMs >= 0) {
       if (!author.isEmpty())
         author += " · ";
@@ -747,17 +866,108 @@ class MediaDock : public QWidget {
     }
     item->setData(AuthorRole, author);
     // Retain the original URL for accessible navigation and diagnostics.
-    item->setToolTip(
-        "<qt>" + title.toHtmlEscaped() + "<br>" +
-        (cached ? cached->metadata.author.toHtmlEscaped() : QString{}) +
-        "<br>" + u.toHtmlEscaped() + "</qt>");
+    item->setToolTip("<qt>" + title.toHtmlEscaped() + "<br>" +
+                     (cached ? (cached->metadata.details.isEmpty()
+                                    ? cached->metadata.author.toHtmlEscaped()
+                                    : infoTooltip(cached->metadata.details))
+                             : QString{}) +
+                     "<br>" + u.toHtmlEscaped() + "</qt>");
     item->setIcon(cached && !cached->image.isNull()
                       ? QIcon(QPixmap::fromImage(cached->image))
                       : QIcon{});
   }
+  void refreshQueueMetadata(const QString &key) {
+    for (int i = 0; i < queue->count(); ++i) {
+      auto item = queue->item(i);
+      if (cacheKey(item->data(UrlRole).toString()) == key)
+        decorateQueueItem(item);
+    }
+    updateQueueDuration();
+  }
+  void cancelMetadata() {
+    if (!metadataProcess)
+      return;
+    auto p = metadataProcess;
+    metadataProcess = nullptr;
+    disconnect(p, nullptr, this, nullptr);
+    p->kill();
+    p->waitForFinished(1000);
+    p->deleteLater();
+    metadataBytes.clear();
+  }
+  void fetchProviderMetadata(const QString &key) {
+    auto engine = selectMediaRuntime(runtimeBundle, runtimeManaged);
+    if (!engine.ready())
+      return;
+    auto p = new QProcess(this);
+    metadataProcess = p;
+    metadataBytes.clear();
+    metadataOverflow = false;
+    p->setProgram(engine.extractor);
+    p->setArguments({"--ignore-config", "--no-playlist", "--skip-download",
+                     "--no-warnings", "--no-progress", "--socket-timeout", "8",
+                     "--retries", "0", "--use-extractors",
+                     providerExtractor(key), "-J", "--", key});
+    auto drain = [this, p] {
+      if (metadataProcess != p)
+        return;
+      auto bytes = p->readAllStandardOutput();
+      if (metadataBytes.size() + bytes.size() > 4 * 1024 * 1024) {
+        metadataOverflow = true;
+        p->kill();
+      } else if (!metadataOverflow)
+        metadataBytes += bytes;
+      p->readAllStandardError();
+    };
+    auto finish = [this, p, key, drain](bool ok) {
+      if (metadataProcess != p)
+        return;
+      drain();
+      metadataProcess = nullptr;
+      p->deleteLater();
+      auto cached = playlistCache.object(key);
+      if (cached) {
+        cached->titleDone = true;
+        if (ok && !metadataOverflow) {
+          auto doc = QJsonDocument::fromJson(metadataBytes);
+          auto root = doc.object();
+          auto expected = providerExtractorKey(key);
+          if (root.value("extractor_key").toString() == expected) {
+            auto info = normalizedMediaInfo(root, mediaProvider(key));
+            cached->metadata.title = info.value("title").toString();
+            cached->metadata.author = info.value("author").toString();
+            cached->metadata.durationMs =
+                qint64(info.value("durationMs").toDouble(-1));
+            cached->metadata.details = info;
+          }
+        }
+        refreshQueueMetadata(key);
+      }
+      metadataBytes.clear();
+    };
+    connect(p, &QProcess::readyReadStandardOutput, this, drain);
+    connect(p, &QProcess::readyReadStandardError, this,
+            [p] { p->readAllStandardError(); });
+    connect(p, &QProcess::errorOccurred, this,
+            [finish](QProcess::ProcessError e) {
+              if (e == QProcess::FailedToStart)
+                finish(false);
+            });
+    connect(p, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [finish](int code, QProcess::ExitStatus exit) {
+              finish(code == 0 && exit == QProcess::NormalExit);
+            });
+    QTimer::singleShot(20000, p, [this, p] {
+      if (metadataProcess == p) {
+        metadataOverflow = true;
+        p->kill();
+      }
+    });
+    p->start();
+  }
   void fetchVisibleMetadata() {
-    if (shuttingDown || playlistReply || !isVisible() || !queue->isVisible() ||
-        !queue->count())
+    if (shuttingDown || playlistReply || metadataProcess || importProcess ||
+        !isVisible() || !queue->isVisible() || !queue->count())
       return;
     for (int row = 0; row < queue->count(); ++row) {
       auto item = queue->item(row);
@@ -766,7 +976,11 @@ class MediaDock : public QWidget {
         continue;
       if (rect.top() >= queue->viewport()->height())
         break;
-      auto id = videoId(item->data(UrlRole).toString());
+      auto original = item->data(UrlRole).toString();
+      auto id = cacheKey(original);
+      auto provider = mediaProvider(original);
+      bool twitch =
+          provider == MediaProvider::Twitch || provider == MediaProvider::Kick;
       if (id.isEmpty())
         continue;
       auto cached = playlistCache.object(id);
@@ -778,7 +992,18 @@ class MediaDock : public QWidget {
         continue;
       bool metadata = !cached->titleDone;
       QUrl address;
-      if (metadata) {
+      if (twitch && metadata) {
+        fetchProviderMetadata(id);
+        return;
+      }
+      if (twitch) {
+        auto url = cached->metadata.details.value("thumbnail").toString();
+        if (!validThumbnailUrl(url, provider)) {
+          cached->imageDone = true;
+          continue;
+        }
+        address = QUrl(url);
+      } else if (metadata) {
         address = QUrl("https://www.youtube.com/oembed");
         QUrlQuery query;
         query.addQueryItem("url", "https://www.youtube.com/watch?v=" + id);
@@ -821,24 +1046,11 @@ class MediaDock : public QWidget {
                           cached->metadata.title = parsed.title;
                         if (!parsed.author.isEmpty())
                           cached->metadata.author = parsed.author;
-                      } else {
-                        QBuffer buffer(&bytes);
-                        buffer.open(QIODevice::ReadOnly);
-                        QImageReader reader(&buffer, "JPEG");
-                        auto size = reader.size();
-                        if (size.isValid() && size.width() <= 1920 &&
-                            size.height() <= 1080) {
-                          reader.setScaledSize(
-                              size.scaled(QSize(160, 90), Qt::KeepAspectRatio));
-                          cached->image = reader.read();
-                        }
+                      } else if (!cached->generated) {
+                        cached->image = decodeThumbnail(bytes, QSize(160, 90));
                       }
                     }
-                    for (int i = 0; i < queue->count(); ++i) {
-                      auto item = queue->item(i);
-                      if (videoId(item->data(UrlRole).toString()) == id)
-                        decorateQueueItem(item);
-                    }
+                    refreshQueueMetadata(id);
                   }
                 }
                 reply->deleteLater();
@@ -873,6 +1085,7 @@ class MediaDock : public QWidget {
     auto s = selected();
     auto id = sources->currentData().toString();
     if (id != sourceId) {
+      cancelMetadata();
       if (importProcess)
         cancelImport("Import cancelled · source changed");
       sourceId = id;
@@ -883,6 +1096,7 @@ class MediaDock : public QWidget {
       seeking = false;
     }
     bool present = bool(s);
+    bool live = false;
     for (QWidget *w :
          std::initializer_list<QWidget *>{url, load, append, queue, autoplay})
       w->setEnabled(present);
@@ -890,7 +1104,9 @@ class MediaDock : public QWidget {
     append->setEnabled(present && !importProcess && importReceipt.isEmpty());
     if (!present) {
       title->setText("Add a Streaming Media source");
-      status->setText("Choose Sources → + → Streaming Media (YouTube)");
+      mediaAuthor->clear();
+      mediaAuthor->hide();
+      status->setText("Choose Sources → + → Streaming Media");
       setQueue("[]");
       preview({});
       duration = 0;
@@ -914,16 +1130,80 @@ class MediaDock : public QWidget {
       calldata_free(&call);
       title->setText(!name.isEmpty()     ? name
                      : current.isEmpty() ? "No video loaded"
-                                         : videoId(current));
-      title->setToolTip("<qt>" + title->text().toHtmlEscaped() + "</qt>");
+                                         : mediaLabel(current));
+      calldata_t infoCall;
+      calldata_init(&infoCall);
+      proc_handler_call(obs_source_get_proc_handler(s.get()),
+                        "streaming_media_info", &infoCall);
+      auto raw = calldata_string(&infoCall, "json");
+      auto info = raw ? QJsonDocument::fromJson(QByteArray(raw)).object()
+                      : QJsonObject{};
+      calldata_free(&infoCall);
+      auto key = cacheKey(current);
+      if (!key.isEmpty() && !info.value("title").toString().isEmpty()) {
+        auto cached = playlistCache.object(key);
+        if (!cached) {
+          cached = new CachedPlaylistItem;
+          playlistCache.insert(key, cached);
+        }
+        if (cached->metadata.details != info) {
+          if (!cached->generated &&
+              mediaProvider(current) != MediaProvider::YouTube &&
+              cached->metadata.details.value("thumbnail") !=
+                  info.value("thumbnail")) {
+            cached->imageDone = false;
+            cached->image = QImage{};
+          }
+          cached->metadata.details = info;
+          cached->metadata.title = info.value("title").toString();
+          cached->metadata.author = info.value("author").toString();
+          cached->metadata.durationMs =
+              qint64(info.value("durationMs").toDouble(-1));
+          cached->titleDone = true;
+          refreshQueueMetadata(key);
+        }
+      }
+      QStringList subtitle;
+      for (auto key : {"author", "category"}) {
+        auto value = info.value(key).toString();
+        if (!value.isEmpty())
+          subtitle << value;
+      }
+      mediaAuthor->setText(subtitle.join(" · "));
+      mediaAuthor->setVisible(!subtitle.isEmpty());
+      auto details = infoTooltip(info);
+      auto tip = "<qt>" + title->text().toHtmlEscaped() +
+                 (details.isEmpty() ? QString{} : "<br>" + details) + "</qt>";
+      title->setToolTip(tip);
+      mediaAuthor->setToolTip(tip);
+
       state = obs_source_media_get_state(s.get());
       duration = obs_source_media_get_duration(s.get());
+      live = duration <= 0 &&
+             (providerExtractor(current) == "twitch:stream" ||
+              providerExtractor(current) == "kick:live") &&
+             (state == OBS_MEDIA_STATE_PLAYING ||
+              state == OBS_MEDIA_STATE_PAUSED ||
+              state == OBS_MEDIA_STATE_BUFFERING);
       auto text = stateText(state);
+      if (live)
+        text += " · Live";
       if (w && h)
         text += QString(" · %1 × %2").arg(w).arg(h);
       status->setText(error.isEmpty() ? text : error);
       status->setToolTip(status->text());
-      preview(videoId(current));
+      auto twitch = canonicalProviderUrl(current);
+      auto imageUrl = info.value("thumbnail").toString();
+      const bool playingFrame =
+          w > 0 && h > 0 &&
+          (state == OBS_MEDIA_STATE_PLAYING || state == OBS_MEDIA_STATE_PAUSED);
+      preview(twitch.isEmpty() ? videoId(current)
+                               : "provider:" + twitch + "|" + imageUrl,
+              imageUrl,
+              playingFrame &&
+                  (!previewWait.isValid() || previewWait.elapsed() < 5000));
+      if (playingFrame)
+        generatedPreview(s.get(), current);
     }
     auto pos = present ? obs_source_media_get_time(s.get()) : 0;
     if (!seeking && !timeline->isSliderDown()) {
@@ -932,7 +1212,8 @@ class MediaDock : public QWidget {
                              ? int(std::clamp(pos * 10000 / duration,
                                               int64_t(0), int64_t(10000)))
                              : 0);
-      time->setText(clockText(pos) + " / " + clockText(duration));
+      time->setText(live ? "Live"
+                         : clockText(pos) + " / " + clockText(duration));
     }
     timeline->setEnabled(present && duration > 0);
     updatePlayIcon();
@@ -971,7 +1252,7 @@ public:
     auto input = new QHBoxLayout;
     url = new QLineEdit(this);
     url->setObjectName("media-url");
-    url->setPlaceholderText("Video or playlist URL");
+    url->setPlaceholderText("Media or playlist URL");
     url->setClearButtonEnabled(true);
     url->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     load = new QPushButton("Play", this);
@@ -1017,7 +1298,15 @@ public:
     status->setWordWrap(true);
     status->setTextFormat(Qt::PlainText);
     status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    mediaAuthor = new QLabel(this);
+    mediaAuthor->setObjectName("media-author");
+    mediaAuthor->setTextFormat(Qt::PlainText);
+    mediaAuthor->setWordWrap(true);
+    mediaAuthor->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    mediaAuthor->setProperty("class", "text-muted");
+    mediaAuthor->hide();
     meta->addWidget(title);
+    meta->addWidget(mediaAuthor);
     meta->addWidget(status);
     now->addLayout(meta, 1);
     layout->addLayout(now);
@@ -1256,10 +1545,12 @@ public:
     refresh();
   }
   ~MediaDock() override {
+    cancelMetadata();
     cancelImport({});
     stopEngineUpdate();
   }
   void shutdown() {
+    cancelMetadata();
     cancelImport({});
     stopEngineUpdate();
     shuttingDown = true;

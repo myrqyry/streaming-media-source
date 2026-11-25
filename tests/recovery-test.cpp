@@ -31,4 +31,17 @@ int main() {
   plan.reset();
   check(!plan.take(20000) && plan.attempts() == 0,
         "manual stop or new source cancels recovery");
+  VodClock clock;
+  check(clock.position(8502448) == 0 && !clock.ready(), "uninitialized clock");
+  check(!clock.observe(0), "ignore decoder placeholder timestamp");
+  check(clock.observe(8502448), "capture initial VOD timestamp");
+  check(clock.position(8503448) == 1000 && clock.target(120000) == 8622448,
+        "relative time and absolute seek");
+  check(clock.position(8500000) == 0, "timestamp before origin");
+  clock.observe(9000000);
+  check(clock.target(0) == 8502448, "origin stable across seeks");
+  clock.reset();
+  check(!clock.ready() && clock.observe(62044) &&
+            clock.target(120000) == 182044,
+        "new decoder origin");
 }

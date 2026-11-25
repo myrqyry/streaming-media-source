@@ -342,3 +342,258 @@ cancel/99-item append without interruption, first-video playback,
 passed. No production install or public push; guide URL becomes available
 on master when the prepared local commits are published. License
 checkpoint remains local pending owner approval.
+
+## Twitch provider expansion — feature/twitch-media
+Owner approved provider-specific validation rather than unrestricted yt-dlp
+input, starting with Twitch live channels and clips; audio-only is desired
+later, not part of this slice. Branch from verified master 4dba700, separate
+from ci/native-platforms / PR #1. Retain streaming_media_youtube source ID
+and OBS FFmpeg playback/audio ownership. New source display name is
+Streaming Media. Existing YouTube playlist import and preview stay separate.
+Canonical Twitch channel and clip inputs, exact extractor selection,
+provider-specific CDN checks and bounded HTTPS preflight; live HLS rejects
+foreign/relative segment URLs, nested masters and URI-bearing tags in the
+initial response. Ongoing FFmpeg live refreshes are not host-filtered by
+the Qt validator; protocol whitelist excludes file and HTTP. Not a general
+network sandbox. Twitch clips use progressive MP4 with ftyp preflight and
+forced MOV/MP4 demuxer; unknown codec metadata from TwitchClips is accepted
+only for MP4, explicit missing tracks rejected. Three public clips observed
+the exact d1ndex63qxojbr.cloudfront.net host; no generic CloudFront allowance.
+Mixed-provider queue, canonical alias dedup, source/dock inputs, opt-in
+request path wired; remote WebSocket integration not separately live-tested.
+Twitch queue uses URL labels until playback; thumbnails/metadata prefetch,
+offline waiting, VODs, audio-only, authenticated/DRM streams deferred.
+RED: new provider API and real Twitch clip missing-codec tests; GREEN all
+9 CTest tests. Final isolated real Linux libobs smokes with fresh HOME and
+empty PATH, bundled official runtime, both exit 0:
+- build/twitch-final-live.log: lofigirl live 1920x1080, nonblack16,
+  source audio27, mixed26, queue/continuing/stop/preserved all 1,
+  7154 dimension queries, source released.
+- build/twitch-final-clip.log: public Lofi Girl clip 1080x1920, duration60012,
+  nonblack28, source audio42, mixed45, pause/seek/resume all 1,
+  queue/continuing/stop/preserved all 1, 21739 queries, source released.
+- build/twitch-youtube-regression.log: earlier same provider slice,
+  YouTube 1920x1080 audio/video and transport, public playlist cancel,
+  append99, metadata, first-video autoplay; 33081 queries, exit 0.
+  Last small Twitch-only UI/canonicalization and clip changes followed
+  by full deterministic tests; YouTube smoke not repeated after them.
+No production install, restart, merge or push. Native CI PR unchanged.
+Retain this feature branch until native CI is integrated; then reconcile
+and qualify Windows/macOS Twitch paths. Real live long-session and recovery
+remain unverified; no claims about ad removal or broadcast rights.
+
+## Provider metadata enrichment
+Owner requested pulling as much useful information as available. Context7
+yt-dlp official README/CONTRIBUTING fields consulted (/yt-dlp/yt-dlp);
+verified actual pinned runtime responses for live Twitch, clip and YouTube.
+Optional fields are omitted, not fabricated; no raw format JSON propagated.
+Normalized metadata (bounded plain text, author vs uploader, description,
+category, date, counts, duration, reported resolution list and validated
+thumbnail) travels through a separate read-only source info procedure.
+Current item reuses playback extraction; no duplicate extraction required.
+Dock displays compact author/category with escaped tooltip details. Twitch
+image host exact static-cdn.jtvnw.net, HTTPS/default port/no credentials,
+no redirects, 1 MiB and bounded JPEG/PNG/WebP dimensions. Visible Twitch
+queue rows use one metadata-only QProcess at a time, exact extractor,
+20s timeout, 4 MiB stdout, no media download, cancelled on source change
+or shutdown. Cache keyed by canonical provider URL (existing YouTube IDs
+retained), session-only; current metadata also populates matching rows.
+YouTube queue oEmbed path retained. Live counts/preview are snapshots,
+not periodic polling. Offline/missing fields fall back to labels; failed
+lookup not automatically retried until cache eviction/session change.
+RED missing metadata API; GREEN 9/9 CTest. Actual isolated Linux OBS
+with empty PATH and fresh HOME:
+- build/info-live.log exit 0, 1920x1080, nonblack16/audio25/mixed23,
+  current author/details, current thumbnail, queued clip metadata and
+  thumbnail, uninterrupted audio, queue/stop/preservation all 1;
+  9835 dimension queries. Screenshot build/twitch-live-info.png.
+- build/info-clip.log exit 0, 1080x1920, nonblack29/audio44/mixed46,
+  pause/seek/resume 1; current/thumbnail/queued live metadata/continuing
+  all 1; 15864 queries. Screenshot build/twitch-clip-info.png.
+- build/info-youtube-regression.log exit 0, 1920x1080,
+  nonblack26/audio39/mixed40, transport all 1, playlist cancel/import99,
+  no playback interruption, metadata/first play all 1, 28898 queries.
+README links passed. No production install/restart or push, PR #1 unchanged.
+Remaining: audio-only and Twitch VODs, richer user-requested live info if
+extractor exposes it, provider metadata refresh policy, native platform
+qualification. No continuous stats or extra Twitch API credentials.
+
+## Completed public Twitch VOD support
+Owner requested Twitch VODs. Added exact numeric canonical URL path,
+shared twitch:vod/TwitchVod extractor selection for playback and queue
+metadata, canonical duplicate detection and VOD labels. Public samples
+2928653119 (MPEG-TS, 33077.044s) and 2931942986 (fragmented MP4,
+33514.267s) resolved via pinned yt-dlp; both use the observed exact CDN
+d2nvs31859zcd8.cloudfront.net. Bounded finite HLS snapshots normalize
+relative media/init URIs against the validated final HTTPS response URL.
+Reject missing ENDLIST, foreign/local/non-HTTPS segments, nested playlists,
+encryption and unrecognized directives. No generic CloudFront widening.
+Private snapshot only, native OBS decoder streams the media on demand.
+
+Actual initial VOD tests revealed native OBS clock uses stream PTS
+(8502.448s TS, 62.044s fMP4 actual ffprobe start_time). Native zero-relative
+seek failed for both. VodClock captures first observed positive decoded
+PTS per epoch, rebases elapsed time and TS native seek/recovery targets.
+Sampled TS origin approximately 2s after true PTS origin; not frame-exact.
+TS near-end natural EOF works despite initial/reset native seek warning.
+fMP4 native seek scanned many segments and did not resume reliably.
+Implemented bounded segment index/slice using EXTINF, media sequence,
+initialization map and discontinuity state. fMP4 seeks re-resolve and reopen
+a private playlist at the containing segment; child native seek disabled.
+Full duration and segment timeline offset preserved. Manual seek requests
+epoch-tagged, processed on video tick, desired paused state carried across
+reopen. Recovery reuses same segment path; seek while remaining paused and
+interrupted-VOD recovery not independently real-qualified. Long uninterrupted
+timestamp-wrap playback not tested. Time query arguments stripped.
+Unsupported encrypted/ongoing/unusual HLS VODs rejected.
+
+RED/green parser, clock, slice and queue tests, all 9 CTest cases pass.
+Real isolated Linux OBS, fresh HOME/empty PATH, pinned runtime:
+- build/twitch-vod-indexed.log exit 0: public fMP4 1920x1080,
+  nonblack32/source audio52/mixed51, pause/seek/resume 1, 120000ms
+  segment start and time120368, near-end indexed 33500000ms start,
+  natural EOF position33514233 / duration33514267, metadata/current
+  thumbnail/queued VOD metadata and audio after automatic TS next all 1,
+  30791 dimension queries and source teardown.
+- build/twitch-vod-final-ts.log completed test: public TS 1920x1080,
+  nonblack31/source audio127/mixed127, pause/seek/resume 1, time121190,
+  natural EOF position33075024/duration33077044, VOD_INFO all 1,
+  auto advanced to fMP4 with audio; 23176 queries and source teardown.
+- build/twitch-vod-final-youtube.log exit 0: YouTube 1920x1080,
+  nonblack26/source audio40/mixed41, pause/seek/resume and thumbnail 1,
+  playlist cancel/import99/uninterrupted/metadata/first autoplay 1,
+  23215 dimension queries and source teardown.
+README/CHANGELOG/AGENTS updated; no production install or restart, no push,
+cross-platform PR untouched. Remaining audio-only, offline waiting,
+live refresh, cross-platform playback and broader VOD qualification.
+
+## Kick provider — live, clips, completed VODs
+Owner requested Kick support and invoked Desktop Commander plus API
+Documentation Checker. Checker received the explicitly observed yt-dlp
+CLI/JSON interface; returned success with no HTTP endpoints, as expected
+for CLI rather than official API. Actual pinned extractor and native
+playback evidence, not a claimed official HTTP API contract.
+Integrated MediaProvider::Kick, exact canonical public channel, UUID VOD
+and clip routes, dedicated kick:live/kick:vod/kick:clip extractors and
+response keys. Provider-specific media and thumbnail host checks;
+live-video.net subdomains, stream.kick.com, clips.kick.com and exact
+observed d26yk4zpyhjeeq.cloudfront.net. No arbitrary CloudFront allowance.
+Live prefetch URLs validated; finite HLS snapshot validates relative
+segment URLs and explicit bounded byte ranges for Kick. Unknown clip
+codec/height accepted only for the observed single HLS format; cap
+cannot be enforced when height is absent. Existing generic provider
+metadata pipeline includes viewer counts and category. Live image HTTP
+403 and archived VOD missing thumbnail; no bypass. Clip image passed.
+Ongoing VODs rejected; channel collection enumeration observed but imports
+not implemented. No official API credentials, auth or DRM work.
+
+RED/green tests for URL/extractor, provider isolation, live prefetch,
+byte ranges, clip format and mixed queue. Clip EOF initially failed:
+decoder duration 32000ms vs reported 30000ms, normalized highwater
+29973ms. Bounded clip duration reconciliation accepts positive reported
+duration within 3s of decoder duration; early interruption still rejected.
+Kick VOD native near-end seek initially required recovery. Generalized
+existing indexed fMP4 slicer to TS specifically for completed Kick VOD;
+byte-range inputs explicitly rejected by slicer (clips retain native seek).
+Segment-aligned, not frame-exact. Final CTest 9/9; README links pass.
+Real isolated Linux OBS, fresh HOME, empty PATH, pinned runtime:
+- build/kick-live.log exit 0: 1920x1080, nonblack18/source audio30/mixed29,
+  current info and viewers 1, queued clip metadata+image 1, continuing
+  and stopped 1; live image 0, 16762 dimension queries, source released.
+- build/kick-eof-fix.log exit 0: 1920x1080, nonblack38/source audio154/
+  mixed132, pause/seek/resume 1, duration30000, thumbnail1, queued
+  VOD metadata1, EOF 29973/30000 natural1, automatic next VOD audio1,
+  25160 queries and source teardown.
+- build/kick-vod-indexed.log exit 0: 1920x1080, nonblack30/source audio49/
+  mixed48, duration40955651, pause/seek/resume1, segment120000, elapsed
+ 120361, near-end segment40940450, natural EOF40955631/40955651,
+  advanced to clip with audio1, metadata/queue/stop1, VOD thumbnail0,
+  44056 queries and source teardown. No recovery needed on final run.
+Earlier successful native VOD and failed clip EOF runs retained in build.
+Previous provider deterministic regressions pass; real YouTube/Twitch
+network smokes not rerun after Kick changes. Broader CDN/format coverage,
+uninterrupted long-duration playback, audio-only, collections, Windows/
+macOS live playback remain unqualified. No production install/restart,
+push or merge; PR #1 untouched.
+
+## Generated playback previews
+Owner approved generating our own thumbnails from already decoded video
+instead of scraping Kick gallery/RSC or trying to bypass image HTTP 403.
+Shared current-media capture uses OBS graphics texture render and staging
+readback on separate video ticks, max 320x180 preserving aspect, RGBX
+copy with validated stride/size and bounded base64 proc transfer once
+per playback epoch. Dock requests only when visible and video is
+playing/paused; request expires after 2s, blank captures retry at most
+once per second. No extra media download or decoder. Captured images
+take precedence over provider images and are reused by matching queue
+rows in existing session-only bounded cache; unplayed items still rely
+on provider metadata/images. Fallback provider fetch retained when
+playback has not supplied a frame. No continuous preview or persistent
+thumbnail files. Existing source ID and playback owner unchanged.
+Red/green tests for dimensions, row stride, color and malformed payload
+in dock-theme-test; CTest 9/9. Real isolated Linux OBS smoke
+SMOKE_GENERATED_PREVIEW=1, fresh HOME/empty PATH, pinned runtime:
+- build/generated-preview-vod.log exit 0, previously qualified Kick VOD
+  1920x1080, source/mixed audio52, pause/seek/resume all 1, captured
+  preview and cache reuse and continued audio all 1, next queue metadata,
+  stop and teardown passed, 14384 dimension queries.
+- build/generated-preview-smoke.log Nickwhite Tuesday Livestream:
+  captured=1 and queue_cache=1, but audio resume/continued=0 and H264
+  invalid NAL/concealment warnings after seeking before preview request.
+  Entire smoke exit 1; exact recording playback issue not resolved.
+  Preview capture itself worked. Do not claim full Nickwhite playback.
+  Sample image build/generated-preview-smoke.png overwritten by final
+  successful known VOD smoke. Windows/macOS graphics and fresh
+  YouTube/Twitch network smokes not independently qualified.
+No production install, restart, merge or push.
+
+## Exact DOOM 64 playlist diagnosis and local update
+Owner reported https://www.youtube.com/playlist?list=PL405KaL3g2_esG8xHAilxHDaqd9aLM28s does not queue or play.
+Running OBS log and installed binary confirmed v0.3.2, which predates
+playlist import; current feature branch module v0.6.0. Both pinned bundled
+and system yt-dlp extracted all four public playlist entries successfully.
+Parameterized existing smoke harness with SMOKE_PLAYLIST_URL and
+SMOKE_PLAYLIST_COUNT, preserving default capacity regression.
+Real isolated Linux OBS build/doom-playlist-smoke.log exit 0:
+1080p audio/video and transport, cancellation, all four videos queued
+alongside existing item, no playback interruption, metadata, first video
+selected and actually played, autoplay enabled, 27803 dimension queries,
+source released. CTest 9/9. No importer code change necessary.
+
+## Native CI integration
+Owner merged PR #1 at 6f38c4f (head bf0a32d). Hosted master run
+45528453220 completed successfully on Linux x86_64, Windows x64,
+macOS Apple Silicon and macOS Intel: pinned OBS 32.2.0 SDK build,
+regression tests and package verification. Windows headless Qt fix
+confirmed. Local master fast-forwarded to origin/master. Integrated
+merged baseline into feature/twitch-media without rewriting history.
+Single conflict in dock-theme-test resolved by retaining both the
+generated-preview assertions and native startup diagnostics. Combined
+feature branch rebuilt locally: 9/9 CTest, 4/4 Python verifier tests,
+minimal backend dock test and README link check pass. Native hosted
+qualification applies to merged baseline only, not the newer Twitch,
+Kick and generated preview changes. No feature push or install/restart.
+
+## Combined provider branch pinned-SDK packaging gate
+At f15a16d, ran the actual Linux CI driver against the pinned OBS 32.2.0 SDK in
+/tmp/obs-ci-pilots.Kk7s56/obs32/sdk using a fresh Release Ninja build.
+Evidence: build/provider-ci.2QKbza/verify.log, ctest.xml, SHA256SUMS.
+All nine CTest results passed, all four verifier Python tests passed, README
+links checked, exact module-and-notices payload, no RPATH/RUNPATH or unresolved
+libraries, archive checksum and extracted module equality verified. No bundled
+runtime or local user artifacts in the test archive. Local qualification only;
+Windows/macOS qualification of this combined branch requires hosted CI. Public
+branch publication remains pending explicit owner intent per AGENTS.md.
+
+## OBS 33 dual-SDK qualification
+Added pinned OBS 33.0.3 alongside 32.2.0. Verified actual upstream
+source archive SHA and WebSocket revision/header SHA. Native dependency
+release 2026-10-23; upstream Windows boolean fix already present, exact
+macOS framework export patch still applicable. Eight-job matrix with
+Ubuntu 26.04 for OBS 33 and version-specific package layout (root module
+on Linux/Windows, same macOS bundle). RED/green seven verifier tests.
+Pinned OBS 32 Release regression and package gate 9/9 passed at
+build/obs32-regression.zDTVj8; modern layout staged with identical OBS32
+module bytes. No OBS33 compile or playback claim. Updated README, CI
+guide, runtime setup, changelog and release checklist. Owner explicitly
+authorized push; feature branch push triggers CI, no merge/release/install.

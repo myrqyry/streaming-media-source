@@ -22,10 +22,36 @@ QString videoId(const QString &url) {
   static const QRegularExpression re("^[A-Za-z0-9_-]{11}$");
   return re.match(id).hasMatch() ? id : QString{};
 }
+QString canonicalMediaUrl(const QString &url) {
+  if (url.size() > 2048)
+    return {};
+  auto id = videoId(url);
+  if (!id.isEmpty())
+    return "https://www.youtube.com/watch?v=" + id;
+  return canonicalProviderUrl(url);
+}
+QString mediaLabel(const QString &url) {
+  auto id = videoId(url);
+  if (!id.isEmpty())
+    return id;
+  auto canonical = canonicalProviderUrl(url);
+  if (canonical.isEmpty())
+    return {};
+  auto u = QUrl(canonical);
+  if (mediaProvider(canonical) == MediaProvider::Kick)
+    return (providerExtractor(canonical) == "kick:live"   ? "Kick · "
+            : providerExtractor(canonical) == "kick:clip" ? "Kick clip · "
+                                                          : "Kick VOD · ") +
+           u.path().mid(1);
+  return u.host() == "clips.twitch.tv"     ? "Twitch clip · " + u.path().mid(1)
+         : u.path().startsWith("/videos/") ? "Twitch VOD · " + u.path().mid(8)
+                                           : "Twitch · " + u.path().mid(1);
+}
 bool MediaQueue::append(const QString &url) {
-  if (urls.size() >= 100 || videoId(url.trimmed()).isEmpty())
+  if (urls.size() >= 100 || canonicalMediaUrl(url.trimmed()).isEmpty())
     return false;
-  urls.append(url.trimmed());
+  auto twitch = canonicalProviderUrl(url.trimmed());
+  urls.append(twitch.isEmpty() ? url.trimmed() : twitch);
   return true;
 }
 bool MediaQueue::move(int from, int to) {
@@ -55,6 +81,14 @@ QString MediaQueue::serialize() const {
                                .toJson(QJsonDocument::Compact));
 }
 
+qint64 kickClipDuration(qint64 decoder, qint64 reported) {
+  // Kick clip HLS can include a small amount of segment padding. Only
+  // accept a positive, independently reported clip duration within 3s.
+  return decoder > 0 && reported > 0 && reported <= decoder &&
+                 decoder - reported <= 3000
+             ? reported
+             : decoder;
+}
 bool reachedVodEnd(qint64 position, qint64 duration, bool live) {
   if (live || duration <= 0 || position <= 0)
     return false;
@@ -66,18 +100,17 @@ QString MediaQueue::appendRequest(const QString &url, const QString &current,
                                   bool enabled) {
   if (!enabled)
     return "disabled";
-  auto id = videoId(url.trimmed());
+  auto id = canonicalMediaUrl(url.trimmed());
   if (url.size() > 2048 || id.isEmpty())
     return "invalid_url";
-  if (videoId(current) == id)
+  if (canonicalMediaUrl(current) == id)
     return "duplicate";
   for (const auto &item : urls)
-    if (videoId(item) == id)
+    if (canonicalMediaUrl(item) == id)
       return "duplicate";
   if (urls.size() >= 100)
     return "queue_full";
-  return append("https://www.youtube.com/watch?v=" + id) ? "queued"
-                                                         : "invalid_url";
+  return append(id) ? "queued" : "invalid_url";
 }
 
 void VodProgress::observe(qint64 ms) {

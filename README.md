@@ -1,8 +1,8 @@
 # Streaming Media Source for OBS
 
-A standalone native OBS source for browser-free YouTube playback. Paste a
-public YouTube video URL into **Sources → Streaming Media (YouTube)**, or
-use the playback dock to import an entire public YouTube playlist.
+A standalone native OBS source for browser-free internet media playback. Paste a
+public YouTube video, Twitch or Kick live channel, clip or VOD URL into
+**Sources → Streaming Media**, or use the dock to import a public YouTube playlist.
 The original URL, not an expiring media URL, is stored in scene settings.
 Playback uses OBS's existing FFmpeg media engine; there is no browser,
 desktop capture, listening port, or full-video download.
@@ -20,7 +20,8 @@ desktop capture, listening port, or full-video download.
 ## Requirements
 
 - OBS Studio 32.x, native Linux installation (development/verification target:
-  OBS 32.2.0, libobs 32.0.1 headers, Qt 6.4.2).
+  OBS 32.2.0, libobs 32.0.1 headers, Qt 6.4.2). OBS 33.0.3 is a separate
+  qualification target; see the [OBS version compatibility guide](docs/ci.md#obs-32-and-33-compatibility).
 - The bundled Linux x86_64 package includes the standalone yt-dlp
   extractor and Deno JavaScript runtime. No separate Python, Node,
   yt-dlp, curl executable or PATH configuration is required.
@@ -29,6 +30,26 @@ desktop capture, listening port, or full-video download.
   existing NVM layout. The same Qt HTTPS rendition validation is used.
 - CMake and Qt6 Core/Widgets/Network and libobs/frontend API development
   headers for building.
+
+### OBS version and install layout
+
+Build against the SDK matching your OBS major version. OBS 33 requires a newer
+build environment (Ubuntu 26.04 with FFmpeg 8 or newer for Linux CI); do not
+replace system libraries on an OBS 32 workstation to build it. A module
+compiled against OBS 33 must not be installed in OBS 32.
+
+| Host | OBS 32 package | OBS 33 package |
+| --- | --- | --- |
+| Linux | `obs-streaming-media/bin/64bit/obs-streaming-media.so` under `$XDG_CONFIG_HOME/obs-studio/plugins` (default `~/.config`) | `obs-streaming-media/obs-streaming-media.so` under `$XDG_DATA_HOME/obs-studio/plugins` (default `~/.local/share`) |
+| Windows x64 | `obs-streaming-media/bin/64bit/obs-streaming-media.dll` | `obs-streaming-media/obs-streaming-media.dll` |
+| macOS | `obs-streaming-media.plugin` | `obs-streaming-media.plugin` |
+
+Windows per-plugin packages belong under `%ProgramData%/obs-studio/plugins`;
+macOS uses the standard OBS plugin bundle directory. Preserve the accompanying
+`data/` directory (bundle resources on macOS). Do not install both layouts
+for the same plugin at once. Close OBS before replacing an installation.
+OBS 33 packages and these paths are prepared for qualification, not a claim
+of verified playback. See [CI and package verification](docs/ci.md).
 
 ## Media engine setup
 
@@ -39,12 +60,12 @@ executables there, and refresh engine status.
 
 See the [runtime setup guide](docs/runtime-setup.md) for direct downloads,
 SHA-256 verification and step-by-step instructions. Linux x86_64 is the
-verified target; the Windows and macOS links are for planned builds.
+verified playback target; Windows and macOS runtime playback is not yet qualified.
 
 ## Install a local test package
 
 First generate the Linux x86_64 bundled archive using the [build and install](#build-and-install)
-instructions below. From the directory containing the archive and its checksum,
+instructions below (the example is for OBS 32). From the directory containing the archive and its checksum,
 verify the archive, close OBS, and extract it into the per-user plugins directory:
 
 ```sh
@@ -54,7 +75,7 @@ tar -xzf streaming-media-source-0.6.0-linux-x86_64-bundled.tar.gz \
   -C "$HOME/.config/obs-studio/plugins"
 ```
 
-Restart OBS, add **Streaming Media (YouTube)**, and open **Docks →
+Restart OBS, add **Streaming Media**, and open **Docks →
 Streaming Media**. The archive contains the plugin, extractor, Deno and
 runtime notices. No separate runtime setup or system-wide installation is
 required. Public binary releases are not yet available.
@@ -70,6 +91,13 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix "$HOME/.config/obs-studio/plugins/obs-streaming-media"
 ```
+
+The commands above target OBS 32. For an OBS 33 SDK, use a separate build
+directory, select `-DSTREAMING_MEDIA_PACKAGE_LAYOUT=modern` and stage under
+`"${XDG_DATA_HOME:-$HOME/.local/share}/obs-studio/plugins/obs-streaming-media"`.
+The default `auto` layout follows the detected libobs version; CI explicitly
+selects the corresponding layout. Verify the build against its intended
+host before installing.
 
 The bundle is installed under the module's own `data/runtime/` directory.
 It is preferred over system tools. For a source-only development build,
@@ -97,7 +125,7 @@ CPack produces a compressed archive and SHA-256 file. The system-runtime
 build produces a separately named archive without the bundled executables.
 Do not upload bundled archives until the redistribution review is complete.
 
-Restart OBS when convenient. In source properties, paste a YouTube URL and
+Restart OBS when convenient. In source properties, paste a supported YouTube, Twitch or Kick URL and
 select maximum resolution, hardware decoding, playback speed and network
 buffer. The source has OBS's normal media controls. Restart resolves a
 fresh media URL; expired URLs and extraction errors can require a fresh resolution.
@@ -117,6 +145,101 @@ observed natural VOD end. Stop leaves upcoming entries intact. A premature
 decoder end or error preserves the queue and surfaces Retry, which resolves
 a fresh URL. Enable or disable automatic recovery in source properties
 (**Recover interrupted playback**, enabled by default).
+
+### Twitch channels, clips and VODs
+
+Paste a public channel URL (for example, `https://www.twitch.tv/lofigirl`)
+or a public clip or recording URL into the same source or dock. Both the
+`clips.twitch.tv/<slug>` and `www.twitch.tv/<channel>/clip/<slug>` forms
+are accepted. Channel names are case-normalized and clip aliases
+canonicalized. Public completed recordings use
+`https://www.twitch.tv/videos/<numeric-id>`; time query parameters are
+currently discarded when canonicalizing the URL. Play, Queue and opt-in WebSocket requests share the same
+mixed-provider queue. A live channel does not auto-advance like a finite
+video; stop or choose the next item manually. Live seeking is disabled.
+Current Twitch and YouTube playback reuses extractor metadata: title,
+channel, category, description, publication date, reported resolutions,
+and available views, concurrent viewers, likes, follower and comment
+counts. Clip uploader is distinguished from channel. The dock shows a
+compact channel/category line and escaped detail tooltips. Twitch
+thumbnails load from the observed Twitch CDN with HTTPS-only requests,
+no redirects, bounded size and image dimensions.
+
+Visible Twitch queue entries are enriched one at a time by an independent
+metadata-only yt-dlp process with a 20-second timeout and 4 MiB response
+limit; this never downloads the media file or changes playback. YouTube
+queue rows retain their lightweight oEmbed/thumbnail path. Previously
+resolved items reuse session metadata. Counts are extraction-time
+snapshots, not live polling, and missing fields are omitted. Failed
+lookups fall back to URL labels; metadata is not persisted in scenes.
+An offline channel requires a later retry.
+
+Completed public Twitch VODs support HLS MPEG-TS and fragmented MP4.
+The resolver validates a bounded finite media playlist, resolves segment
+and initialization URLs against the validated CDN, and passes a private
+playlist snapshot to the native decoder. It does not download the recording.
+MPEG-TS uses native seeking with a sampled timestamp origin; fragmented
+MP4 uses indexed segment seeking, reopening the requested segment rather
+than scanning the recording. Segment-aligned seeks can land before the
+requested time and briefly reopen playback; the timeline is not frame-exact.
+Public VODs use the same queue, metadata, duration and natural-end auto
+advance as other finite media. Continuous playback across timestamp wraps,
+interrupted-VOD recovery and unusual HLS directives are not fully qualified.
+
+The original OBS source identifier is unchanged, so existing scenes
+continue to use the same source type. Twitch channel collections,
+authenticated content, automatic offline waiting and audio-only playback
+are not yet supported.
+
+### Kick channels, clips and VODs
+
+Paste a public Kick channel URL (`https://kick.com/<channel>`), a public
+completed VOD (`https://kick.com/<channel>/videos/<uuid>`), or a clip
+(`https://kick.com/<channel>/clips/clip_<id>`) into the source or dock.
+These share the existing mixed-provider queue and metadata cache.
+Live channel resolution uses the dedicated Kick extractor and the observed
+live-video.net CDN; completed recordings and clips use finite validated HLS
+snapshots. Clips use explicit byte-range segments rather than progressive
+MP4 files, and some have no advertised resolution or codec metadata;
+their available single rendition can play regardless of the configured
+maximum resolution when the extractor does not report a height.
+Completed Kick VODs use segment-indexed seeking, retaining the full recording
+duration while reopening the containing segment. Seeks are segment-aligned,
+not frame-exact. The finite HLS timeline normalizes nonzero timestamps; for Kick clips,
+a positive reported duration may replace a decoder duration only when the
+difference is at most three seconds of trailing segment padding.
+
+The dock shows title, channel, category, description, available qualities,
+views and concurrent viewer count when supplied by the extractor. Counts
+are snapshots, not live polling. Clip thumbnails are supported; sampled
+live thumbnail requests returned HTTP 403 and a sampled completed VOD
+had no thumbnail. The dock falls back gracefully rather than bypassing
+access restrictions or inventing data.
+
+Only public content is supported. Ongoing VODs are rejected in favor of the
+live channel URL. Offline channels, inaccessible media, channel-wide
+video/clip imports and authentication are not supported by this slice.
+The observed CDN allowlist deliberately does not admit arbitrary
+CloudFront or other unrelated media hosts.
+
+Use `SMOKE_KICK=live`, `SMOKE_KICK=clip` or `SMOKE_KICK=vod` with
+the corresponding public URL in the isolated smoke harness. Set
+`SMOKE_KICK_NEXT` to an accessible public media URL for queue metadata;
+`SMOKE_KICK_EOF=1` additionally exercises natural completion and next
+item playback for a finite item. Live and archived media availability
+can change independently of the plugin.
+
+### Generated playback previews
+
+The dock captures its own still from the existing OBS media decoder when
+video is available. A small aspect-preserving image (at most 320 × 180)
+is rendered and read back over separate video ticks, once per playback
+generation; it is not a continuous video preview. The captured image
+takes priority over provider thumbnails and is reused for matching queue
+entries in the bounded session cache. There is no extra media download,
+browser, second decoder, or persistent screenshot file. A provider image
+remains a fallback before video is available or if capture fails.
+Unplayed queue items still use provider thumbnails when available.
 
 ### Visual playlists (0.4.1)
 
@@ -272,7 +395,7 @@ This removes the lock inversion identified in a production freeze stack.
 ## Architecture
 
 The bundled or system yt-dlp runs on a cancellable worker with explicit time/size bounds and without
-loading user config. The resolver uses Qt HTTPS with bounded response sizes, deadlines and validated googlevideo redirects (no external curl process). It validates reachable video and audio
+loading user config. The resolver uses Qt HTTPS with bounded response sizes, deadlines and provider-specific CDN/redirect validation (no external curl process). It validates reachable video and audio
 renditions before choosing them, preserves signed URLs verbatim, and for
 supported VOD HLS playlists saves only the validated playlist metadata in a
 private temporary directory. FFmpeg reads the segments on demand. A private
@@ -281,25 +404,24 @@ the child's own output mixer is disabled to avoid double routing.
 
 ## Verification
 
-The [Linux CI workflow](.github/workflows/ci.yml) uses a pinned OBS 32.2.0
-SDK and the matching obs-websocket API header. It runs the deterministic
-native CTest suite (at least nine tests, no skips), checks README links,
-and validates a Linux install archive containing only the module and project
-license notices, plus its checksum.
-The CI path deliberately does not download or bundle yt-dlp/Deno, run live
-YouTube playback, or upload release binaries.
+The [CI workflow](.github/workflows/ci.yml) covers two pinned SDK versions,
+OBS 32.2.0 and 33.0.3, across Linux x86_64, Windows x64, macOS Intel and
+macOS Apple Silicon. It checks deterministic regressions and module-only
+package contents and checksums. The matrix is a qualification mechanism,
+not a guarantee that every cell has passed. It does not bundle runtime
+executables, run live playback or publish releases.
 
 | Target | Verification boundary |
 | --- | --- |
 | Linux x86_64 / OBS 32.2 / Qt 6.4.2 | Local native tests, isolated real playback and bundled package smoke |
-| Ubuntu 24.04 / pinned OBS 32.2 SDK | Local and GitHub-hosted CI driver passed |
-| Windows x64, macOS Apple Silicon / Intel | Native qualification workflow in development; not yet qualified |
+| Ubuntu 24.04 / pinned OBS 32.2 SDK | Combined provider branch local Release build, nine tests and package gate passed |
+| Windows x64, macOS Apple Silicon / Intel / OBS 32.2 | [Merged CI baseline passed](https://github.com/myrqyry/streaming-media-source/actions/runs/45528453220); newer provider changes still need native CI and real playback |
+| OBS 33.0.3 / all four platforms | SDK pins and matrix configured; actual native build and playback qualification pending |
 | Flatpak, other OBS majors | Not qualified |
 
-The first hosted attempt was budget-blocked while the repository was private.
-After the owner made the repository public, the [retried hosted run](https://github.com/myrqyry/streaming-media-source/actions/runs/45412791743)
-completed successfully. See the [CI guide](docs/ci.md) for local reproduction. The optional real
-playback smoke below is deliberately separate from deterministic CI.
+See the [CI guide](docs/ci.md) for local reproduction and the [release
+checklist](RELEASE_CHECKLIST.md) for remaining gates. The optional real
+playback smoke below is separate from deterministic CI.
 
 
 ```sh
@@ -326,14 +448,23 @@ capacity limits, metadata, Play and source teardown. Set
 `SMOKE_PLAYLIST_DRAG=1` for the
 real X11 drag-reorder test in the normal playback smoke (requires Python
 Xlib). It validates that public titles and thumbnails load and that the
-actual persisted queue order changes. Test logs from FFmpeg may contain
+actual persisted queue order changes. For Twitch, set `SMOKE_TWITCH_LIVE=1` and pass a live channel URL, or
+`SMOKE_TWITCH_CLIP=1` and pass a public clip URL. These modes check real
+video/audio, current title/author and thumbnail, metadata and thumbnail
+of a different queued Twitch item, continued mixer audio, stop and source
+teardown; the clip mode additionally exercises transport. Set
+`SMOKE_TWITCH_VOD=1` and supply a public completed VOD URL to test
+transport, queue metadata and an actual near-end seek and natural
+auto advance to a second public VOD. The two sampled recording IDs in
+the harness may expire; set `SMOKE_TWITCH_VOD_NEXT` to a different accessible
+public recording to replace the default next item. Test logs from FFmpeg may contain
 temporary signed media URLs; redact before sharing.
 
 ## Troubleshooting
 
 | Symptom | First check |
 | --- | --- |
-| Source is missing | Confirm native OBS 32.x and the module under `plugins/obs-streaming-media/bin/64bit/`. Restart OBS after installation. |
+| Source is missing | Confirm the module was built for your OBS version and is in the corresponding [install layout](#obs-version-and-install-layout). Restart OBS after installation. |
 | Media engine missing | Follow the [runtime setup guide](docs/runtime-setup.md) or use a compatible existing system runtime. |
 | Video no longer resolves | Check for extractor updates in the dock, then retry. |
 | Update breaks resolution | Choose Use bundled extractor in the engine menu and retry. |
@@ -350,12 +481,12 @@ credentials, private scene information and local paths before sharing.
 
 The intended experience is direct media playback without the web player's
 ad UI. Ads, in-video sponsor segments, DRM, private/member-only videos,
-live streams and platform restrictions are not guaranteed to be removed or
+live-stream availability and platform restrictions are not guaranteed to be removed or
 supported. No browser-cookie import, login, proxy, token-provider integration
 or automatic circumvention of unavailable media. Use content you have
 permission to play or rebroadcast. YouTube extraction can change independently
-of the plugin. Current verified scope is public VOD, native Linux OBS,
-software decoding; hardware decoding is an option but is not yet qualified.
+of the plugin. Current verified scope is public YouTube VOD, sampled public
+Twitch and Kick live channels/clips and completed VODs, native Linux OBS and software decoding; hardware decoding is an option but is not yet qualified.
 
 See ACTIVE_WORK.md for exact runtime evidence and remaining work.
 

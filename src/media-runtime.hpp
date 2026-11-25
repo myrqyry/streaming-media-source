@@ -1,4 +1,5 @@
 #pragma once
+#include "resolver.hpp"
 #include <QByteArray>
 #include <QString>
 #include <QStringList>
@@ -16,7 +17,9 @@ MediaRuntime findMediaRuntime(const QString &bundle,
                               bool systemFallback = true);
 QByteArray probeMediaHttps(const QString &url, bool hls,
                            std::chrono::steady_clock::time_point deadline,
-                           const std::function<bool()> &cancelled);
+                           const std::function<bool()> &cancelled,
+                           MediaProvider provider = MediaProvider::YouTube,
+                           QString *effectiveUrl = nullptr);
 
 QString manualRuntimeDirectory(const QString &managed);
 MediaRuntime selectMediaRuntime(const QString &bundle, const QString &managed,

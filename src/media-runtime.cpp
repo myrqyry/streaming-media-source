@@ -64,14 +64,15 @@ MediaRuntime findMediaRuntime(const QString &bundle, const QStringList &paths,
 }
 QByteArray probeMediaHttps(const QString &url, bool hls,
                            std::chrono::steady_clock::time_point deadline,
-                           const std::function<bool()> &cancelled) {
+                           const std::function<bool()> &cancelled,
+                           MediaProvider provider, QString *effectiveUrl) {
   using namespace std::chrono;
   auto end = std::min(deadline, steady_clock::now() + seconds(5));
   QNetworkAccessManager network;
   QUrl next(url, QUrl::StrictMode);
   for (int redirects = 0; redirects <= 3; ++redirects) {
     if (cancelled() || steady_clock::now() >= end ||
-        !validMediaUrl(QString::fromLatin1(next.toEncoded())))
+        !validMediaUrl(QString::fromLatin1(next.toEncoded()), provider))
       return {};
     QNetworkRequest request(next);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
@@ -121,7 +122,12 @@ QByteArray probeMediaHttps(const QString &url, bool hls,
       next = next.resolved(redir);
       continue;
     }
-    return status >= 200 && status < 300 ? body : QByteArray{};
+    if (status >= 200 && status < 300) {
+      if (effectiveUrl)
+        *effectiveUrl = QString::fromLatin1(next.toEncoded());
+      return body;
+    }
+    return {};
   }
   return {};
 }
