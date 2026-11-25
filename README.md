@@ -1,8 +1,8 @@
 # Streaming Media Source for OBS
 
-A standalone native OBS source for browser-free YouTube playback. Paste a
-public YouTube video URL into **Sources → Streaming Media (YouTube)**, or
-use the playback dock to import an entire public YouTube playlist.
+A standalone native OBS source for browser-free internet media playback. Paste a
+public YouTube video, Twitch live channel or Twitch clip URL into
+**Sources → Streaming Media**, or use the dock to import a public YouTube playlist.
 The original URL, not an expiring media URL, is stored in scene settings.
 Playback uses OBS's existing FFmpeg media engine; there is no browser,
 desktop capture, listening port, or full-video download.
@@ -54,7 +54,7 @@ tar -xzf streaming-media-source-0.6.0-linux-x86_64-bundled.tar.gz \
   -C "$HOME/.config/obs-studio/plugins"
 ```
 
-Restart OBS, add **Streaming Media (YouTube)**, and open **Docks →
+Restart OBS, add **Streaming Media**, and open **Docks →
 Streaming Media**. The archive contains the plugin, extractor, Deno and
 runtime notices. No separate runtime setup or system-wide installation is
 required. Public binary releases are not yet available.
@@ -97,7 +97,7 @@ CPack produces a compressed archive and SHA-256 file. The system-runtime
 build produces a separately named archive without the bundled executables.
 Do not upload bundled archives until the redistribution review is complete.
 
-Restart OBS when convenient. In source properties, paste a YouTube URL and
+Restart OBS when convenient. In source properties, paste a supported YouTube or Twitch URL and
 select maximum resolution, hardware decoding, playback speed and network
 buffer. The source has OBS's normal media controls. Restart resolves a
 fresh media URL; expired URLs and extraction errors can require a fresh resolution.
@@ -117,6 +117,23 @@ observed natural VOD end. Stop leaves upcoming entries intact. A premature
 decoder end or error preserves the queue and surfaces Retry, which resolves
 a fresh URL. Enable or disable automatic recovery in source properties
 (**Recover interrupted playback**, enabled by default).
+
+### Twitch channels and clips
+
+Paste a public channel URL (for example, `https://www.twitch.tv/lofigirl`)
+or a public clip URL into the same source or dock. Both the
+`clips.twitch.tv/<slug>` and `www.twitch.tv/<channel>/clip/<slug>` forms
+are accepted. Channel names are case-normalized and clip aliases
+canonicalized. Play, Queue and opt-in WebSocket requests share the same
+mixed-provider queue. A live channel does not auto-advance like a finite
+video; stop or choose the next item manually. Live seeking is disabled.
+Twitch titles resolve at playback time; Twitch thumbnail and prefetch
+metadata are not implemented. An offline channel requires a later retry.
+
+The original OBS source identifier is unchanged, so existing scenes
+continue to use the same source type. Twitch VODs, channel collections,
+authenticated content, automatic offline waiting and audio-only playback
+are not yet supported.
 
 ### Visual playlists (0.4.1)
 
@@ -272,7 +289,7 @@ This removes the lock inversion identified in a production freeze stack.
 ## Architecture
 
 The bundled or system yt-dlp runs on a cancellable worker with explicit time/size bounds and without
-loading user config. The resolver uses Qt HTTPS with bounded response sizes, deadlines and validated googlevideo redirects (no external curl process). It validates reachable video and audio
+loading user config. The resolver uses Qt HTTPS with bounded response sizes, deadlines and provider-specific CDN/redirect validation (no external curl process). It validates reachable video and audio
 renditions before choosing them, preserves signed URLs verbatim, and for
 supported VOD HLS playlists saves only the validated playlist metadata in a
 private temporary directory. FFmpeg reads the segments on demand. A private
@@ -325,7 +342,10 @@ capacity limits, metadata, Play and source teardown. Set
 `SMOKE_PLAYLIST_DRAG=1` for the
 real X11 drag-reorder test in the normal playback smoke (requires Python
 Xlib). It validates that public titles and thumbnails load and that the
-actual persisted queue order changes. Test logs from FFmpeg may contain
+actual persisted queue order changes. For Twitch, set `SMOKE_TWITCH_LIVE=1` and pass a live channel URL, or
+`SMOKE_TWITCH_CLIP=1` and pass a public clip URL. These modes check real
+video/audio, dock queue insertion, stop and source teardown; the clip
+mode additionally exercises transport. Test logs from FFmpeg may contain
 temporary signed media URLs; redact before sharing.
 
 ## Troubleshooting
@@ -349,12 +369,12 @@ credentials, private scene information and local paths before sharing.
 
 The intended experience is direct media playback without the web player's
 ad UI. Ads, in-video sponsor segments, DRM, private/member-only videos,
-live streams and platform restrictions are not guaranteed to be removed or
+live-stream availability and platform restrictions are not guaranteed to be removed or
 supported. No browser-cookie import, login, proxy, token-provider integration
 or automatic circumvention of unavailable media. Use content you have
 permission to play or rebroadcast. YouTube extraction can change independently
-of the plugin. Current verified scope is public VOD, native Linux OBS,
-software decoding; hardware decoding is an option but is not yet qualified.
+of the plugin. Current verified scope is public YouTube VOD, sampled public
+Twitch live channels/clips, native Linux OBS and software decoding; hardware decoding is an option but is not yet qualified.
 
 See ACTIVE_WORK.md for exact runtime evidence and remaining work.
 

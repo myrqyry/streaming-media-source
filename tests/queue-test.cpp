@@ -59,6 +59,21 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 100; i++)
     full.append(a);
   check(full.appendRequest(c, {}, true) == "queue_full", "bounded queue");
+  MediaQueue twitch;
+  auto clip = QString("https://clips.twitch.tv/ExampleClip-123");
+  check(twitch.append("https://www.twitch.tv/LofiGirl"),
+        "Twitch channel queue");
+  check(twitch.appendRequest(clip, {}, true) == "queued",
+        "Twitch clip request");
+  check(twitch.appendRequest(
+            "https://twitch.tv/user/clip/ExampleClip-123?foo=bar", {}, true) ==
+            "duplicate",
+        "canonical clip alias");
+  check(twitch.appendRequest("https://twitch.tv/lofigirl", {}, true) ==
+            "duplicate",
+        "channel case identity");
+  check(MediaQueue::fromJson(twitch.serialize()).items() == twitch.items(),
+        "mixed provider persistence");
   VodProgress progress;
   progress.observe(626590);
   progress.observe(633000);

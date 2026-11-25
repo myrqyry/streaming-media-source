@@ -78,4 +78,82 @@ int main(int argc, char **argv) {
             "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"file:///etc/"
             "passwd\"\nhttps://rr1.googlevideo.com/segment\n#EXT-X-ENDLIST\n"),
         "reject unvalidated key URI");
+  check(mediaProvider("https://www.twitch.tv/LofiGirl") ==
+            MediaProvider::Twitch,
+        "Twitch channel");
+  check(mediaProvider("https://clips.twitch.tv/ExampleClip-123") ==
+            MediaProvider::Twitch,
+        "Twitch clip");
+  check(mediaProvider("https://twitch.tv/user/clip/ExampleClip-123") ==
+            MediaProvider::Twitch,
+        "channel clip");
+  check(mediaProvider("https://twitch.tv.evil.test/user") ==
+            MediaProvider::Unknown,
+        "Twitch host spoof");
+  check(mediaProvider("https://twitch.tv/videos/123") == MediaProvider::Unknown,
+        "VOD deferred");
+  check(mediaProvider("https://twitch.tv/directory") == MediaProvider::Unknown,
+        "not a channel");
+  check(!validMediaUrl("https://foo.ttvnw.net/video", MediaProvider::YouTube),
+        "provider isolation");
+  check(validMediaUrl("https://foo.ttvnw.net/video", MediaProvider::Twitch),
+        "Twitch CDN");
+  check(!validMediaUrl("https://foo.ttvnw.net.evil.test/video",
+                       MediaProvider::Twitch),
+        "CDN spoof");
+  check(!validMediaUrl("https://rr1.googlevideo.com/video",
+                       MediaProvider::Twitch),
+        "reject cross-provider");
+  QByteArray twitch =
+      R"({"extractor_key":"TwitchStream","is_live":true,"formats":[{"url":"https://use22.playlist.ttvnw.net/hls","protocol":"m3u8_native","vcodec":"avc1","acodec":"mp4a","height":1080},{"url":"https://use22.playlist.ttvnw.net/audio","protocol":"m3u8_native","vcodec":"none","acodec":"mp4a"}]})";
+  auto stream = selectMedia(
+      twitch, 1080, [](const QString &, bool) { return true; },
+      MediaProvider::Twitch);
+  check(stream.error.isEmpty() && stream.live && stream.direct.endsWith("/hls"),
+        "combined Twitch live stream");
+  check(!selectMedia(
+             twitch, 720, [](const QString &, bool) { return true; },
+             MediaProvider::Twitch)
+             .error.isEmpty(),
+        "quality cap and audio-only deferred");
+  QByteArray clip =
+      R"({"extractor_key":"TwitchClips","formats":[{"url":"https://clips-media-assets2.twitch.tv/clip.mp4","protocol":"https","vcodec":"avc1","acodec":"mp4a","height":720}]})";
+  check(selectMedia(
+            clip, 1080, [](const QString &, bool) { return true; },
+            MediaProvider::Twitch)
+            .error.isEmpty(),
+        "Twitch clip");
+  check(!selectMedia(clip, 1080, [](const QString &, bool) { return true; })
+             .error.isEmpty(),
+        "Twitch response rejected by YouTube");
+  QByteArray realClipShape =
+      R"({"extractor_key":"TwitchClips","formats":[{"url":"https://d1ndex63qxojbr.cloudfront.net/clip.mp4","protocol":"https","ext":"mp4","vcodec":null,"acodec":null,"height":720}]})";
+  check(selectMedia(
+            realClipShape, 1080, [](const QString &, bool) { return true; },
+            MediaProvider::Twitch)
+            .error.isEmpty(),
+        "real clip schema with unknown codecs");
+  auto silent = realClipShape;
+  silent.replace("\"acodec\":null", "\"acodec\":\"none\"");
+  check(!selectMedia(
+             silent, 1080, [](const QString &, bool) { return true; },
+             MediaProvider::Twitch)
+             .error.isEmpty(),
+        "reject explicitly silent clip");
+  auto unknownCdn = realClipShape;
+  unknownCdn.replace("d1ndex63qxojbr", "unrelated");
+  check(!selectMedia(
+             unknownCdn, 1080, [](const QString &, bool) { return true; },
+             MediaProvider::Twitch)
+             .error.isEmpty(),
+        "no generic CloudFront allowance");
+  check(validTwitchLivePlaylist(
+            "#EXTM3U\n#EXTINF:2,\nhttps://foo.ttvnw.net/seg.ts\n"),
+        "live CDN playlist");
+  check(!validTwitchLivePlaylist("#EXTM3U\n#EXTINF:2,\nfile:///tmp/secret\n"),
+        "local segment rejected");
+  check(!validTwitchLivePlaylist(
+            "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://evil.test/"
+            "key\"\nhttps://foo.ttvnw.net/seg.ts\n"),
+        "key URI rejected");
 }

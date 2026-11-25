@@ -29,7 +29,7 @@
 #include <thread>
 OBS_DECLARE_MODULE()
 MODULE_EXPORT const char *obs_module_description(void) {
-  return "Streaming Media: native YouTube playback";
+  return "Streaming Media: native internet media playback";
 }
 namespace {
 struct Request {
@@ -210,9 +210,11 @@ struct Source {
     resumeGate = resumeTarget > 0;
     if (req.url.isEmpty())
       return;
-    if (!validYoutube(req.url)) {
-      fail("Use an HTTPS YouTube URL");
-      blog(LOG_WARNING, "[streaming-media] Use an HTTPS YouTube URL");
+    if (canonicalMediaUrl(req.url).isEmpty()) {
+      fail("Use an HTTPS YouTube or Twitch video/channel URL");
+      blog(
+          LOG_WARNING,
+          "[streaming-media] Use an HTTPS YouTube or Twitch video/channel URL");
       return;
     }
     req.id = ++epoch;
@@ -244,7 +246,15 @@ struct Source {
                         "-J"};
     args << "--no-js-runtimes" << "--js-runtimes"
          << (engine.engine + ":" + engine.js);
-    args << "--" << r.url;
+    auto provider = mediaProvider(r.url);
+    auto twitch = canonicalTwitchUrl(r.url);
+    if (provider == MediaProvider::Twitch) {
+      // Disable the generic/other-site extractors for this trusted route.
+      args << "--use-extractors"
+           << (twitch.startsWith("https://clips.twitch.tv/") ? "twitch:clips"
+                                                             : "twitch:stream");
+    }
+    args << "--" << (provider == MediaProvider::Twitch ? twitch : r.url);
     QProcess p;
     p.setProgram(engine.extractor);
     blog(LOG_INFO, "[streaming-media] Media engine: %s (%s)",
@@ -283,22 +293,29 @@ struct Source {
     QHash<QString, QByteArray> snapshots;
     bool live =
         QJsonDocument::fromJson(output).object().value("is_live").toBool();
-    auto selected =
-        selectMedia(output, r.height, [&](const QString &url, bool hls) {
+    auto selected = selectMedia(
+        output, r.height,
+        [&](const QString &url, bool hls) {
           if (closing || epoch != r.id ||
               std::chrono::steady_clock::now() > deadline)
             return false;
-          auto body = probeMediaHttps(url, hls, deadline,
-                                      [&] { return closing || epoch != r.id; });
+          auto body = probeMediaHttps(
+              url, hls, deadline, [&] { return closing || epoch != r.id; },
+              provider);
           if (!hls)
-            return !body.isEmpty();
+            return provider == MediaProvider::Twitch
+                       ? body.size() >= 12 && body.mid(4, 4) == "ftyp"
+                       : !body.isEmpty();
+          if (provider == MediaProvider::Twitch)
+            return live && validTwitchLivePlaylist(body);
           if (live)
             return body.startsWith("#EXTM3U");
           if (!validVodPlaylist(body))
             return false;
           snapshots.insert(url, body);
           return true;
-        });
+        },
+        provider);
     if (!selected.live) {
       selected.videoPlaylist = snapshots.value(selected.videoUrl);
       selected.audioPlaylist = snapshots.value(selected.audioUrl);
@@ -373,7 +390,7 @@ struct Source {
     QString status;
     if (!enabled)
       status = "disabled";
-    else if (url.size() > 2048 || videoId(url).isEmpty())
+    else if (url.size() > 2048 || canonicalMediaUrl(url).isEmpty())
       status = "invalid_url";
     else {
       std::lock_guard<std::mutex> l(s->mutex);
@@ -566,8 +583,9 @@ struct Source {
         q = MediaQueue{};
       else if (c.op == "autoplay")
         autoAdvance = c.target != 0;
-      else if (c.op == "load" && !videoId(c.url).isEmpty()) {
-        url = c.url;
+      else if (c.op == "load" && !canonicalMediaUrl(c.url).isEmpty()) {
+        auto twitch = canonicalTwitchUrl(c.url);
+        url = twitch.isEmpty() ? c.url : twitch;
         load = true;
       } else if (c.op == "play" && matches()) {
         url = q.take(c.row);
@@ -692,10 +710,16 @@ struct Source {
     auto settings = obs_data_create();
     obs_data_set_bool(settings, "is_local_file", false);
     obs_data_set_string(settings, "input", qPrintable(input));
+    auto twitch = mediaProvider(r->req.url) == MediaProvider::Twitch;
     obs_data_set_string(settings, "input_format",
-                        r->media.manifest.isEmpty() ? "" : "hls");
+                        twitch && !r->media.live ? "mov"
+                        : r->media.manifest.isEmpty() && !r->media.hlsDirect
+                            ? ""
+                            : "hls");
     obs_data_set_string(settings, "ffmpeg_options",
-                        r->media.manifest.isEmpty()
+                        mediaProvider(r->req.url) == MediaProvider::Twitch
+                            ? "protocol_whitelist=https,tcp,tls,crypto"
+                        : r->media.manifest.isEmpty()
                             ? ""
                             : "protocol_whitelist=file,http,https,tcp,tls,"
                               "crypto allowed_extensions=ALL");
@@ -723,7 +747,7 @@ struct Source {
     }
     decoderEnded = false;
     failed = false;
-    blog(LOG_INFO, "[streaming-media] YouTube media resolved (%s, %s)",
+    blog(LOG_INFO, "[streaming-media] Media resolved (%s, %s)",
          r->media.live ? "live" : "VOD",
          r->media.manifest.isEmpty() ? "combined" : "adaptive HLS");
   }
@@ -760,7 +784,7 @@ struct Source {
     queue(r);
   }
 };
-const char *name(void *) { return "Streaming Media (YouTube)"; }
+const char *name(void *) { return "Streaming Media"; }
 void defaults(obs_data_t *s) {
   obs_data_set_default_int(s, "height", 1080);
   obs_data_set_default_bool(s, "hw", true);
@@ -775,7 +799,7 @@ void defaults(obs_data_t *s) {
 obs_properties_t *properties(void *) {
   auto p = obs_properties_create();
   obs_properties_set_flags(p, OBS_PROPERTIES_DEFER_UPDATE);
-  obs_properties_add_text(p, "url", "YouTube URL", OBS_TEXT_DEFAULT);
+  obs_properties_add_text(p, "url", "Media URL", OBS_TEXT_DEFAULT);
   auto q = obs_properties_add_list(p, "height", "Maximum resolution",
                                    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
   for (auto h : {360, 480, 720, 1080, 1440, 2160}) {

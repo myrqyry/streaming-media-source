@@ -191,8 +191,10 @@ int main(int argc, char **argv) {
           audio.load(), mixed.load(), obs_source_media_get_state(s),
           (long long)obs_source_media_get_time(s),
           (long long)obs_source_media_get_duration(s));
+  const bool liveMode = qEnvironmentVariableIntValue("SMOKE_TWITCH_LIVE") != 0;
+  const bool clipMode = qEnvironmentVariableIntValue("SMOKE_TWITCH_CLIP") != 0;
   bool pause = false, seek = false, resume = false;
-  if (playing) {
+  if (playing && !liveMode) {
     obs_source_media_play_pause(s, true);
     until(3, [&] {
       return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED;
@@ -202,11 +204,12 @@ int main(int argc, char **argv) {
     auto after = obs_source_media_get_time(s);
     pause = obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED &&
             std::abs(after - before) < 300;
-    obs_source_media_set_time(s, 45000);
+    auto target = clipMode ? 10000 : 45000;
+    obs_source_media_set_time(s, target);
     obs_source_media_play_pause(s, false);
     seek = until(18, [&] {
       auto t = obs_source_media_get_time(s);
-      return t >= 44000 && t < 65000;
+      return t >= target - 1000 && t < target + 20000;
     });
     auto n = mixed.load();
     resume = until(8, [&] { return mixed > n + 10; });
@@ -235,15 +238,34 @@ int main(int argc, char **argv) {
                               !title->text().isEmpty() &&
                               title->text() != "No video loaded";
                      });
-  bool thumbnailReady =
-      widgetReady && until(8, [&] { return !thumb->pixmap().isNull(); });
+  bool thumbnailReady = widgetReady && !liveMode &&
+                        until(8, [&] { return !thumb->pixmap().isNull(); });
   fprintf(stderr, "DOCK widgets=%d thumbnail=%d\n", widgetReady,
           thumbnailReady);
-  if (widgetReady)
+  if (widgetReady && !liveMode && !clipMode)
     dock->grab().save("build/dock-widget-preview.png");
   const bool recoveryMode = qEnvironmentVariableIntValue("SMOKE_RECOVERY") != 0;
   const bool importMode =
       qEnvironmentVariableIntValue("SMOKE_PLAYLIST_IMPORT") != 0;
+  bool livePass = false;
+  if ((liveMode || clipMode) && playing && widgetReady) {
+    entry->setText("https://www.twitch.tv/lofigirl");
+    add->click();
+    bool appended = until(3, [&] {
+      return queued(s) == QStringList{"https://www.twitch.tv/lofigirl"};
+    });
+    auto count = mixed.load();
+    bool continued = until(8, [&] { return mixed > count + 15; });
+    obs_source_media_stop(s);
+    bool stoppedLive = until(5, [&] {
+      return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+    });
+    livePass = appended && continued && stoppedLive &&
+               queued(s) == QStringList{"https://www.twitch.tv/lofigirl"};
+    fprintf(stderr,
+            "TWITCH_MEDIA queue=%d continuing=%d stop=%d preserved=%d\n",
+            appended, continued, stoppedLive, livePass);
+  }
   bool importPass = false;
   bool recoveryPass = false;
   bool queueEdit = false, nextPlayback = false, stopped = false,
@@ -375,8 +397,8 @@ int main(int argc, char **argv) {
             reconnect, resumed, cancelled, preserved, (long long)oldPos);
     recoveryPass = reconnect && resumed && cancelled && preserved;
   }
-  if (!importMode && !recoveryMode && playing && pause && seek && resume &&
-      widgetReady) {
+  if (!liveMode && !clipMode && !importMode && !recoveryMode && playing &&
+      pause && seek && resume && widgetReady) {
     const char *other = "https://youtu.be/aqz-KE-bpKQ";
     const char *third = "https://youtu.be/jNQXAC9IVRw";
     entry->setText(third);
@@ -510,12 +532,14 @@ int main(int argc, char **argv) {
   obs_wait_for_destroy_queue();
   pump();
   obs_shutdown();
-  return dimensionQueries > 100 && released && playing && pause && seek &&
-                 resume && widgetReady &&
-                 (importMode ? importPass
-                  : recoveryMode
-                      ? recoveryPass
-                      : (queueEdit && nextPlayback && stopped && autoNext))
+  return dimensionQueries > 100 && released && playing && widgetReady &&
+                 ((liveMode || clipMode)
+                      ? (livePass && (!clipMode || (pause && seek && resume)))
+                      : (pause && seek && resume &&
+                         (importMode     ? importPass
+                          : recoveryMode ? recoveryPass
+                                         : (queueEdit && nextPlayback &&
+                                            stopped && autoNext))))
              ? 0
              : 1;
 }

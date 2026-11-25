@@ -342,3 +342,42 @@ cancel/99-item append without interruption, first-video playback,
 passed. No production install or public push; guide URL becomes available
 on master when the prepared local commits are published. License
 checkpoint remains local pending owner approval.
+
+## Twitch provider expansion — feature/twitch-media
+Owner approved provider-specific validation rather than unrestricted yt-dlp
+input, starting with Twitch live channels and clips; audio-only is desired
+later, not part of this slice. Branch from verified master 4dba700, separate
+from ci/native-platforms / PR #1. Retain streaming_media_youtube source ID
+and OBS FFmpeg playback/audio ownership. New source display name is
+Streaming Media. Existing YouTube playlist import and preview stay separate.
+Canonical Twitch channel and clip inputs, exact extractor selection,
+provider-specific CDN checks and bounded HTTPS preflight; live HLS rejects
+foreign/relative segment URLs, nested masters and URI-bearing tags in the
+initial response. Ongoing FFmpeg live refreshes are not host-filtered by
+the Qt validator; protocol whitelist excludes file and HTTP. Not a general
+network sandbox. Twitch clips use progressive MP4 with ftyp preflight and
+forced MOV/MP4 demuxer; unknown codec metadata from TwitchClips is accepted
+only for MP4, explicit missing tracks rejected. Three public clips observed
+the exact d1ndex63qxojbr.cloudfront.net host; no generic CloudFront allowance.
+Mixed-provider queue, canonical alias dedup, source/dock inputs, opt-in
+request path wired; remote WebSocket integration not separately live-tested.
+Twitch queue uses URL labels until playback; thumbnails/metadata prefetch,
+offline waiting, VODs, audio-only, authenticated/DRM streams deferred.
+RED: new provider API and real Twitch clip missing-codec tests; GREEN all
+9 CTest tests. Final isolated real Linux libobs smokes with fresh HOME and
+empty PATH, bundled official runtime, both exit 0:
+- build/twitch-final-live.log: lofigirl live 1920x1080, nonblack16,
+  source audio27, mixed26, queue/continuing/stop/preserved all 1,
+  7154 dimension queries, source released.
+- build/twitch-final-clip.log: public Lofi Girl clip 1080x1920, duration60012,
+  nonblack28, source audio42, mixed45, pause/seek/resume all 1,
+  queue/continuing/stop/preserved all 1, 21739 queries, source released.
+- build/twitch-youtube-regression.log: earlier same provider slice,
+  YouTube 1920x1080 audio/video and transport, public playlist cancel,
+  append99, metadata, first-video autoplay; 33081 queries, exit 0.
+  Last small Twitch-only UI/canonicalization and clip changes followed
+  by full deterministic tests; YouTube smoke not repeated after them.
+No production install, restart, merge or push. Native CI PR unchanged.
+Retain this feature branch until native CI is integrated; then reconcile
+and qualify Windows/macOS Twitch paths. Real live long-session and recovery
+remain unverified; no claims about ad removal or broadcast rights.

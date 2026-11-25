@@ -3,6 +3,17 @@
 This log describes development checkpoints. No public release has been
 published.
 
+## Unreleased — Twitch provider
+
+- Public Twitch live channels and clips, sharing the existing native
+  decoder, mixer routing and mixed-provider queue.
+- Provider-specific URL/extractor and CDN validation, canonical Twitch
+  channel/clip identities, bounded HTTPS preflight and live HLS checks.
+- Source name becomes Streaming Media; the persisted source ID is unchanged.
+- Verified isolated Linux OBS playback for a public live channel and clip.
+  Twitch VODs, thumbnails, offline polling and audio-only mode remain
+  future work.
+
 ## 0.6.0 — Playlist imports
 
 - Import supported public YouTube playlists through the existing dock's

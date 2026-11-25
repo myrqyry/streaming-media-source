@@ -634,10 +634,11 @@ class MediaDock : public QWidget {
       else
         action(immediate ? "load" : "append",
                "https://www.youtube.com/watch?v=" + id);
-    } else if (!id.isEmpty()) {
+    } else if (!canonicalMediaUrl(value).isEmpty()) {
       action(immediate ? "load" : "append", value);
     } else {
-      url->setToolTip("Enter a valid HTTPS YouTube video or playlist URL");
+      url->setToolTip(
+          "Enter a YouTube video/playlist or Twitch channel/clip URL");
       url->setFocus();
       return;
     }
@@ -691,8 +692,11 @@ class MediaDock : public QWidget {
     }
     previewImage = QImage{};
     thumbnail->setPixmap({});
-    thumbnail->setText(id.isEmpty() ? "No video" : "Preview unavailable");
-    if (id.isEmpty() || !isVisible())
+    bool twitch = id.startsWith("twitch:");
+    thumbnail->setText(twitch         ? "Twitch · Preview unavailable"
+                       : id.isEmpty() ? "No video"
+                                      : "Preview unavailable");
+    if (twitch || id.isEmpty() || !isVisible())
       return;
     QNetworkRequest request(
         QUrl("https://i.ytimg.com/vi/" + id + "/mqdefault.jpg"));
@@ -737,9 +741,12 @@ class MediaDock : public QWidget {
     auto cached = playlistCache.object(id);
     auto title = cached && !cached->metadata.title.isEmpty()
                      ? cached->metadata.title
-                     : id;
+                     : mediaLabel(u);
     item->setText(title);
-    auto author = cached ? cached->metadata.author : QString{};
+    auto author = cached ? cached->metadata.author
+                  : mediaProvider(u) == MediaProvider::Twitch
+                      ? QString("Twitch")
+                      : QString{};
     if (cached && cached->metadata.durationMs >= 0) {
       if (!author.isEmpty())
         author += " · ";
@@ -883,6 +890,7 @@ class MediaDock : public QWidget {
       seeking = false;
     }
     bool present = bool(s);
+    bool live = false;
     for (QWidget *w :
          std::initializer_list<QWidget *>{url, load, append, queue, autoplay})
       w->setEnabled(present);
@@ -890,7 +898,7 @@ class MediaDock : public QWidget {
     append->setEnabled(present && !importProcess && importReceipt.isEmpty());
     if (!present) {
       title->setText("Add a Streaming Media source");
-      status->setText("Choose Sources → + → Streaming Media (YouTube)");
+      status->setText("Choose Sources → + → Streaming Media");
       setQueue("[]");
       preview({});
       duration = 0;
@@ -914,16 +922,24 @@ class MediaDock : public QWidget {
       calldata_free(&call);
       title->setText(!name.isEmpty()     ? name
                      : current.isEmpty() ? "No video loaded"
-                                         : videoId(current));
+                                         : mediaLabel(current));
       title->setToolTip("<qt>" + title->text().toHtmlEscaped() + "</qt>");
       state = obs_source_media_get_state(s.get());
       duration = obs_source_media_get_duration(s.get());
+      live = duration <= 0 &&
+             canonicalTwitchUrl(current).startsWith("https://www.twitch.tv/") &&
+             (state == OBS_MEDIA_STATE_PLAYING ||
+              state == OBS_MEDIA_STATE_PAUSED ||
+              state == OBS_MEDIA_STATE_BUFFERING);
       auto text = stateText(state);
+      if (live)
+        text += " · Live";
       if (w && h)
         text += QString(" · %1 × %2").arg(w).arg(h);
       status->setText(error.isEmpty() ? text : error);
       status->setToolTip(status->text());
-      preview(videoId(current));
+      auto twitch = canonicalTwitchUrl(current);
+      preview(twitch.isEmpty() ? videoId(current) : "twitch:" + twitch);
     }
     auto pos = present ? obs_source_media_get_time(s.get()) : 0;
     if (!seeking && !timeline->isSliderDown()) {
@@ -932,7 +948,8 @@ class MediaDock : public QWidget {
                              ? int(std::clamp(pos * 10000 / duration,
                                               int64_t(0), int64_t(10000)))
                              : 0);
-      time->setText(clockText(pos) + " / " + clockText(duration));
+      time->setText(live ? "Live"
+                         : clockText(pos) + " / " + clockText(duration));
     }
     timeline->setEnabled(present && duration > 0);
     updatePlayIcon();
@@ -971,7 +988,7 @@ public:
     auto input = new QHBoxLayout;
     url = new QLineEdit(this);
     url->setObjectName("media-url");
-    url->setPlaceholderText("Video or playlist URL");
+    url->setPlaceholderText("Media or playlist URL");
     url->setClearButtonEnabled(true);
     url->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     load = new QPushButton("Play", this);
