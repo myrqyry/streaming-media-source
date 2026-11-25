@@ -187,3 +187,12 @@ regressions passed with the pinned OBS 32 SDK. Both legacy and modern
 package layouts were staged with identical module bytes using that SDK.
 That validates packaging, not OBS 33 binary compatibility. The subsequent merged video/audio baseline passed actual native builds, deterministic tests and packaging across the complete OBS 32/33 matrix ([run 45542976014](https://github.com/myrqyry/streaming-media-source/actions/runs/45542976014)). Actual OBS 33 playback and the newer TikTok matrix remain unqualified.
 The full matrix covers eight jobs. The reusable workflow uploads exactly one verified module-only test archive plus SHA256SUMS per job; hosted artifact upload on this new branch remains to be qualified. No release is created.
+
+### Public artifact names
+
+Downloadable test artifacts and their enclosed archives use
+`streaming-media-source-<platform>-obs<version>-test` (archive suffix
+.tar.gz or .zip). The installed module and its existing directories retain
+`obs-streaming-media` to preserve compatible upgrades. The original shared
+CI run 45558327793 passed all eight jobs and uploaded eight artifacts;
+the new public-name workflow revision must qualify separately.

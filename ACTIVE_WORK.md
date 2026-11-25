@@ -760,3 +760,9 @@ Caller now pins immutable db6c0a2495456274ecf91f18fc83dd64dc6d29e8; the
 identical temporary local workflow has been removed. Push the pilot
 branch to qualify cross-repository invocation and all eight artifacts.
 Do not migrate unrelated plugins or merge until that run is verified.
+
+Owner requested public name streaming-media-source. Pin shared CI
+197937941f13cd2adabd302a19691b44b62b2032 and set package-name independently
+of module name. Shared regressions 4/4 passed, prior hosted matrix 8/8
+with eight artifacts confirmed through API. No module, source ID, install
+directory or local checkout rename. New hosted names pending qualification.
