@@ -126,3 +126,8 @@ endif()
 add_executable(playlist-import-test tests/playlist-import-test.cpp)
 target_link_libraries(playlist-import-test PRIVATE stream-resolver)
 add_test(NAME playlist-import-test COMMAND playlist-import-test)
+
+add_executable(resume-bookmark-test tests/resume-bookmark-test.cpp)
+target_include_directories(resume-bookmark-test PRIVATE src)
+target_link_libraries(resume-bookmark-test PRIVATE Qt6::Core)
+add_test(NAME resume-bookmark-test COMMAND resume-bookmark-test)

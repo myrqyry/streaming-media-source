@@ -1,7 +1,9 @@
 #include "media-dock.hpp"
 #include "media-queue.hpp"
+#include "resume-bookmark.hpp"
 #include <QApplication>
 #include <QComboBox>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
@@ -173,9 +175,21 @@ int main(int argc, char **argv) {
   obs_data_set_string(d, "url", argv[2]);
   obs_data_set_bool(d, "hw", qEnvironmentVariableIntValue("SMOKE_HW") != 0);
   const bool audioMode = qEnvironmentVariableIntValue("SMOKE_AUDIO") != 0;
-  auto s = obs_source_create(audioMode ? "streaming_media_audio"
-                                       : "streaming_media_youtube",
-                             "Media smoke", d, nullptr);
+  const auto restartMode = qEnvironmentVariable("SMOKE_RESTART_MODE");
+  const auto restartFile = qEnvironmentVariable("SMOKE_RESTART_FILE");
+  obs_source_t *s = nullptr;
+  if (restartMode.startsWith("restore") || restartMode == "stopped") {
+    auto saved = obs_data_create_from_json_file(qPrintable(restartFile));
+    if (saved) {
+      s = obs_load_source(saved);
+      obs_data_release(saved);
+      if (s)
+        obs_source_load(s);
+    }
+  } else
+    s = obs_source_create(audioMode ? "streaming_media_audio"
+                                    : "streaming_media_youtube",
+                          "Media smoke", d, nullptr);
   obs_data_release(d);
   if (!s)
     return 2;
@@ -186,6 +200,124 @@ int main(int argc, char **argv) {
   obs_add_raw_video_callback(nullptr, videoCb, nullptr);
   audio_convert_info conv{48000, AUDIO_FORMAT_FLOAT_PLANAR, SPEAKERS_STEREO};
   obs_add_raw_audio_callback(0, &conv, mixedCb, nullptr);
+  if (!restartMode.isEmpty()) {
+    const auto savedPosition = [&] {
+      auto *settings = obs_source_get_settings(s);
+      auto saved = decodeResume(
+          QString::fromUtf8(obs_data_get_string(settings, "resume_bookmark")),
+          QString::fromUtf8(obs_source_get_uuid(s)), currentUrl(s));
+      obs_data_release(settings);
+      return saved;
+    };
+    bool ok = false;
+    if (restartMode.startsWith("record")) {
+      const bool shouldPause = restartMode == "record";
+      const bool ready = until(60, [&] {
+        return obs_source_media_get_time(s) > 3000 && mixed > 15 &&
+               (audioMode || changedFrames > 5);
+      });
+      queueCommand(s, "append", "https://www.youtube.com/watch?v=jNQXAC9IVRw");
+      const bool queueOk = until(3, [&] { return queued(s).size() == 1; });
+      if (shouldPause)
+        obs_source_media_play_pause(s, true);
+      const bool paused = until(5, [&] {
+        return obs_source_media_get_state(s) ==
+               (shouldPause ? OBS_MEDIA_STATE_PAUSED : OBS_MEDIA_STATE_PLAYING);
+      });
+      const auto position = obs_source_media_get_time(s);
+      auto saved = obs_save_source(s);
+      auto bookmark = savedPosition();
+      const bool wrote = obs_data_save_json_safe(saved, qPrintable(restartFile),
+                                                 "tmp", nullptr);
+      obs_data_release(saved);
+      ok = ready && queueOk && paused && wrote && bookmark &&
+           bookmark->mode ==
+               (shouldPause ? ResumeMode::Paused : ResumeMode::Playing) &&
+           position > 2000 && std::abs(position - bookmark->position) < 1000;
+      fprintf(stderr,
+              "RESTART_RECORD ready=%d queue=%d paused=%d saved=%d pos=%lld "
+              "bookmark=%lld ok=%d\n",
+              ready, queueOk, paused, wrote, (long long)position,
+              (long long)(bookmark ? bookmark->position : -1), ok);
+    } else if (restartMode == "restore-playing") {
+      const auto bookmark = savedPosition();
+      const auto expected = bookmark ? bookmark->position : -1;
+      const bool playing = until(70, [&] {
+        return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+               obs_source_media_get_time(s) >= expected - 1000 && mixed > 10 &&
+               (audioMode || changedFrames > 5);
+      });
+      const auto position = obs_source_media_get_time(s);
+      ok = bookmark && bookmark->mode == ResumeMode::Playing && playing &&
+           std::abs(position - expected) < 6000 && queued(s).size() == 1;
+      fprintf(stderr,
+              "RESTART_PLAYING expected=%lld pos=%lld playback=%d queue=%lld "
+              "ok=%d\n",
+              (long long)expected, (long long)position, playing,
+              (long long)queued(s).size(), ok);
+    } else if (restartMode == "restore") {
+      const auto bookmark = savedPosition();
+      const auto expected = bookmark ? bookmark->position : -1;
+      const bool paused = until(70, [&] {
+        return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED;
+      });
+      const auto position = obs_source_media_get_time(s);
+      const bool queueOk =
+          queued(s) ==
+          QStringList{"https://www.youtube.com/watch?v=jNQXAC9IVRw"};
+      std::this_thread::sleep_for(600ms);
+      const auto later = obs_source_media_get_time(s);
+      const bool stable = std::abs(later - position) < 500;
+      auto before = mixed.load(), video = changedFrames.load();
+      obs_source_media_play_pause(s, false);
+      const bool resumed = until(12, [&] {
+        return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+               obs_source_media_get_time(s) > position + 500 &&
+               mixed > before + 10 && (audioMode || changedFrames > video + 5);
+      });
+      obs_source_media_stop(s);
+      const bool stopped = until(5, [&] {
+        return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+      });
+      auto saved = obs_save_source(s);
+      const bool wrote = obs_data_save_json_safe(saved, qPrintable(restartFile),
+                                                 "tmp", nullptr);
+      obs_data_release(saved);
+      auto stopBookmark = savedPosition();
+      ok = bookmark && paused && stable && position > 1000 &&
+           std::abs(position - expected) < 3000 && queueOk && resumed &&
+           stopped && wrote && stopBookmark &&
+           stopBookmark->mode == ResumeMode::Stopped;
+      fprintf(stderr,
+              "RESTART_RESTORE expected=%lld pos=%lld later=%lld paused=%d "
+              "stable=%d queue=%d resumed=%d stopped=%d saved=%d ok=%d\n",
+              (long long)expected, (long long)position, (long long)later,
+              paused, stable, queueOk, resumed, stopped, wrote, ok);
+    } else if (restartMode == "stopped") {
+      for (int i = 0; i < 25; ++i) {
+        pump();
+        std::this_thread::sleep_for(100ms);
+      }
+      auto bookmark = savedPosition();
+      ok = bookmark && bookmark->mode == ResumeMode::Stopped &&
+           obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED &&
+           mixed == 0 && queued(s).size() == 1;
+      fprintf(stderr, "RESTART_STOPPED state=%d audio=%d queue=%lld ok=%d\n",
+              obs_source_media_get_state(s), mixed.load(),
+              (long long)queued(s).size(), ok);
+    }
+    obs_remove_raw_video_callback(videoCb, nullptr);
+    obs_remove_raw_audio_callback(0, mixedCb, nullptr);
+    obs_source_remove_audio_capture_callback(s, audioCb, nullptr);
+    obs_set_output_source(0, nullptr);
+    obs_sceneitem_remove(item);
+    obs_scene_release(scene);
+    obs_source_release(s);
+    obs_wait_for_destroy_queue();
+    pump();
+    obs_shutdown();
+    return ok ? 0 : 1;
+  }
   // Exercise the previously inverted parent/child filter lock order while
   // actual decoder audio is arriving. Keep one source ref until the probe
   // joins.

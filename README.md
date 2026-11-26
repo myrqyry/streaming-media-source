@@ -38,7 +38,7 @@ See [provider details](docs/providers.md) for accepted URL forms, seeking behavi
 4. Paste a public media link and choose **Play** or **Queue**.
 5. Enable **Auto advance** to play the next queued item after a natural ending.
 
-The dock includes native media controls, timeline, resolution, metadata, generated video previews, track artwork, drag-to-reorder queue rows and OBS theme integration. Audio-only sources select dedicated audio renditions and produce no video frames. Each source has its own queue and normal OBS mixer routing.
+The dock includes native media controls, timeline, resolution, metadata, generated video previews, track artwork, drag-to-reorder queue rows and OBS theme integration. Audio-only sources select dedicated audio renditions and produce no video frames. Each source has its own queue and normal OBS mixer routing. **Resume playback on OBS startup** (enabled by default) restores the saved VOD position and play/pause state when OBS reopens; an explicitly stopped source stays stopped. Live sources reconnect rather than seeking. See the [restart behavior and seek limitations](docs/playback.md#resume-after-reopening-obs).
 
 ## Playlists
 

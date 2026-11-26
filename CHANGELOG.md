@@ -3,6 +3,15 @@
 This log describes development checkpoints. No public release has been
 published.
 
+## Unreleased — Startup playback resume
+
+- Default-enabled source preference restores a saved VOD position and
+  playing/paused/stopped intent across normal OBS scene saves and reloads.
+- UUID/URL-bound validated bookmarks; no persisted signed playback URLs.
+- Existing queue and decoder retained; live playback reconnects instead
+  of seeking. Provider-specific seek granularity remains.
+- Independent crash-period checkpoints are not implemented.
+
 ## Unreleased — TikTok video
 
 - Initial public TikTok post playback via bounded temporary MP4 download

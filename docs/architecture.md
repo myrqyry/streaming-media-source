@@ -33,6 +33,17 @@ xvfb-run -a timeout 200 build/obs-youtube-smoke \
   'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
 ```
 
+For restart-position testing, use the same executable and a private
+temporary directory. Set `SMOKE_RESTART_FILE` to a path in that directory,
+and run separate processes with `SMOKE_RESTART_MODE=record`, `restore`,
+then `stopped`. The harness uses real `obs_save_source` and
+`obs_load_source` serialization and checks paused stability, actual
+resumed pixels/audio, queue preservation and stopped-state persistence.
+For automatic playing-state restoration, use `record-playing` and
+`restore-playing` with a fresh bookmark file; set `SMOKE_AUDIO=1` on both
+runs to test the audio source. The test URL must be a supported finite item.
+See [startup resume](playback.md#resume-after-reopening-obs).
+
 For a staged bundled build, set `SMOKE_MODULE_DATA` to the staged
 `data/` directory and point the test at the staged module binary.
 The test can run with an empty PATH and a fresh HOME to verify runtime
