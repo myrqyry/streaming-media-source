@@ -24,7 +24,9 @@
 #include <utility>
 #include <vector>
 using namespace std::chrono_literals;
-std::atomic<int> frames{0}, audio{0}, mixed{0};
+std::atomic<int> frames{0}, audio{0}, mixed{0}, changedFrames{0}, allChanges{0};
+uint64_t previousOutput = 0;
+uint64_t previousFrame = 0;
 std::mutex uiMutex;
 std::vector<std::pair<obs_task_t, void *>> tasks;
 void queueUi(obs_task_t f, void *p, bool wait) {
@@ -53,8 +55,23 @@ void videoCb(void *, struct video_data *v) {
     for (int x = 0; x < 320; x += 8)
       if (v->data[0][y * v->linesize[0] + x] > 30)
         different++;
-  if (different > 30)
-    frames++;
+  {
+    uint64_t hash = 1469598103934665603ULL;
+    for (int y = 0; y < 180; y += 4)
+      for (int x = 0; x < 320; x += 4)
+        hash = (hash ^ v->data[0][y * v->linesize[0] + x]) * 1099511628211ULL;
+    if (hash != previousOutput) {
+      previousOutput = hash;
+      ++allChanges;
+    }
+    if (different > 30) {
+      ++frames;
+      if (hash != previousFrame) {
+        previousFrame = hash;
+        ++changedFrames;
+      }
+    }
+  }
 }
 void audioCb(void *, obs_source_t *, const struct audio_data *a, bool muted) {
   if (muted || !a->data[0])
@@ -154,7 +171,7 @@ int main(int argc, char **argv) {
     return 2;
   auto d = obs_data_create();
   obs_data_set_string(d, "url", argv[2]);
-  obs_data_set_bool(d, "hw", false);
+  obs_data_set_bool(d, "hw", qEnvironmentVariableIntValue("SMOKE_HW") != 0);
   const bool audioMode = qEnvironmentVariableIntValue("SMOKE_AUDIO") != 0;
   auto s = obs_source_create(audioMode ? "streaming_media_audio"
                                        : "streaming_media_youtube",
@@ -204,6 +221,70 @@ int main(int argc, char **argv) {
       kickMode == "clip";
   const bool vodMode = qEnvironmentVariableIntValue("SMOKE_TWITCH_VOD") != 0 ||
                        kickMode == "vod";
+  const bool resumeOnly =
+      qEnvironmentVariableIntValue("SMOKE_RESUME_ONLY") != 0;
+  bool plainResume = false, resumeVideo = audioMode, dockResume = false;
+  if (resumeOnly && playing && !liveMode) {
+    obs_source_media_play_pause(s, true);
+    bool paused = until(3, [&] {
+      return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED;
+    });
+    std::this_thread::sleep_for(1200ms);
+    const auto changes = changedFrames.load(), samples = mixed.load();
+    const auto before = obs_source_media_get_time(s);
+    obs_source_media_play_pause(s, false);
+    plainResume = paused && until(12, [&] {
+                    return mixed > samples + 10 &&
+                           obs_source_media_get_time(s) > before + 500;
+                  });
+    resumeVideo =
+        audioMode || until(8, [&] { return changedFrames > changes + 5; });
+    fprintf(stderr, "PLAIN_RESUME audio_clock=%d video_changed=%d frames=%d\n",
+            plainResume, resumeVideo, changedFrames.load() - changes);
+    auto moduleData = qEnvironmentVariable("SMOKE_MODULE_DATA", tmp.path());
+    std::unique_ptr<QWidget> controls(createMediaDockWidget(
+        moduleData + "/runtime", tmp.filePath("runtime")));
+    controls->resize(360, 430);
+    controls->show();
+    auto *play = controls->findChild<QToolButton *>("media-play");
+    if (play && until(3, [&] {
+          return play->isEnabled() && play->toolTip() == "Pause";
+        })) {
+      const auto start = obs_source_media_get_time(s);
+      const auto videoStart = changedFrames.load(), audioStart = mixed.load();
+      play->click();
+      bool pauseIntent = play->toolTip() == "Play";
+      play->click();
+      bool resumeIntent = play->toolTip() == "Pause";
+      // The decoder runs asynchronously. Require actual advancing video/audio
+      // well after both queued commands have had a chance to execute.
+      bool advanced = until(10, [&] {
+        return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+               obs_source_media_get_time(s) > start + 1000 &&
+               mixed > audioStart + 10 &&
+               (audioMode || changedFrames > videoStart + 5);
+      });
+      // Pause through a different controller, not through this dock.
+      until(3, [&] { return play->toolTip() == "Pause"; });
+      obs_source_media_play_pause(s, true);
+      bool externalPaused = until(3, [&] {
+        return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED;
+      });
+      auto externalStart = obs_source_media_get_time(s);
+      play->click();
+      bool externalResume =
+          externalPaused && until(10, [&] {
+            return obs_source_media_get_state(s) == OBS_MEDIA_STATE_PLAYING &&
+                   obs_source_media_get_time(s) > externalStart + 500;
+          });
+      dockResume = pauseIntent && resumeIntent && advanced && externalResume;
+      fprintf(stderr,
+              "DOCK_RESUME pause_intent=%d resume_intent=%d advancing=%d "
+              "external=%d\n",
+              pauseIntent, resumeIntent, advanced, externalResume);
+    }
+    controls.reset();
+  }
   bool pause = false, seek = false, resume = false;
   if (playing && !liveMode) {
     obs_source_media_play_pause(s, true);
@@ -215,20 +296,69 @@ int main(int argc, char **argv) {
     auto after = obs_source_media_get_time(s);
     pause = obs_source_media_get_state(s) == OBS_MEDIA_STATE_PAUSED &&
             std::abs(after - before) < 300;
-    auto target = audioMode  ? 10000
-                  : vodMode  ? 120000
-                  : clipMode ? 10000
-                             : 45000;
+    auto target =
+        audioMode    ? 10000
+        : vodMode    ? 120000
+        : clipMode   ? 10000
+        : resumeOnly ? std::max<int64_t>(0, obs_source_media_get_time(s) - 1000)
+                     : 45000;
     obs_source_media_set_time(s, target);
     obs_source_media_play_pause(s, false);
     seek = until(18, [&] {
       auto t = obs_source_media_get_time(s);
       return t >= target - 1000 && t < target + 20000;
     });
-    auto n = mixed.load();
+    auto n = mixed.load(), beforeVideo = changedFrames.load(),
+         allBefore = allChanges.load(), litBefore = frames.load();
     resume = until(8, [&] { return mixed > n + 10; });
+    bool seekVideo = !resumeOnly || audioMode ||
+                     until(8, [&] { return changedFrames > beforeVideo + 5; });
+    if (resumeOnly)
+      resumeVideo = resumeVideo && seekVideo;
+    if (resumeOnly)
+      fprintf(stderr,
+              "SEEK_RESUME video_changed=%d changed_frames=%d all_changes=%d "
+              "nonblack=%d\n",
+              seekVideo, changedFrames.load() - beforeVideo,
+              allChanges.load() - allBefore, frames.load() - litBefore);
     fprintf(stderr, "CONTROL pause=%d seek=%d resume_audio=%d time=%lld\n",
             pause, seek, resume, (long long)obs_source_media_get_time(s));
+  }
+  if (resumeOnly) {
+    queryDone = true;
+    dimensions.join();
+    obs_source_media_stop(s);
+    auto weak = obs_source_get_weak_source(s);
+    until(5, [&] {
+      return obs_source_media_get_state(s) == OBS_MEDIA_STATE_STOPPED;
+    });
+    obs_wait_for_destroy_queue();
+    pump();
+    obs_remove_raw_video_callback(videoCb, nullptr);
+    obs_remove_raw_audio_callback(0, mixedCb, nullptr);
+    obs_source_remove_audio_capture_callback(s, audioCb, nullptr);
+    obs_set_output_source(0, nullptr);
+    obs_sceneitem_remove(item);
+    obs_scene_release(scene);
+    obs_source_release(s);
+    for (int i = 0; i < 20; i++) {
+      pump();
+      std::this_thread::sleep_for(20ms);
+    }
+    bool released = until(8, [&] {
+      obs_wait_for_destroy_queue();
+      return obs_weak_source_expired(weak);
+    });
+    fprintf(stderr, "RESUME_TEARDOWN released=%d\n", released);
+    obs_weak_source_release(weak);
+    pump();
+    obs_wait_for_destroy_queue();
+    pump();
+    obs_shutdown();
+    return released && playing && plainResume && resumeVideo && dockResume &&
+                   pause && seek && resume
+               ? 0
+               : 1;
   }
   auto moduleData = qEnvironmentVariable("SMOKE_MODULE_DATA", tmp.path());
   std::unique_ptr<QWidget> dock(createMediaDockWidget(

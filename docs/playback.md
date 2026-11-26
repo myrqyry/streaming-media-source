@@ -10,6 +10,7 @@ Paste a media link and select Play or Queue. The current thumbnail, title,
 actual decoded resolution, state, timeline and transport controls are shown
 without a browser. The queue is stored per source in the scene collection.
 Double-click an item to play it, or use the arrows and remove button.
+Pause/Play immediately reflects the requested transport action and reconciles with the decoder state; rapid successive clicks no longer send duplicate pause commands based on stale dock polling. The dock preview remains a still image, not a live video monitor.
 Auto advance is off by default; when enabled it advances only after an
 observed natural VOD end. Stop leaves upcoming entries intact. A premature
 decoder end or error preserves the queue and surfaces Retry, which resolves

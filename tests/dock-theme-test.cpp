@@ -23,6 +23,10 @@ static void check(bool ok, const char *msg) {
     std::exit(1);
   }
 }
+struct MediaControlFixture {
+  obs_media_state state = OBS_MEDIA_STATE_PLAYING;
+  int pauses = 0, resumes = 0;
+};
 static void settle() {
   QEventLoop loop;
   QTimer::singleShot(50, &loop, &QEventLoop::quit);
@@ -154,6 +158,46 @@ int main(int argc, char **argv) {
     dock.reset();
   }
   dock.reset();
+  // Use actual dock clicks and a controllable OBS source. Two clicks in
+  // one polling interval must not send the same pause command twice.
+  obs_source_info info{};
+  info.id = "streaming_media_youtube";
+  info.type = OBS_SOURCE_TYPE_INPUT;
+  info.output_flags = OBS_SOURCE_CONTROLLABLE_MEDIA;
+  info.get_name = [](void *) { return "Media control fixture"; };
+  info.create = [](obs_data_t *, obs_source_t *) -> void * {
+    return new MediaControlFixture;
+  };
+  info.destroy = [](void *p) { delete static_cast<MediaControlFixture *>(p); };
+  info.media_get_state = [](void *p) {
+    return static_cast<MediaControlFixture *>(p)->state;
+  };
+  info.media_play_pause = [](void *p, bool pause) {
+    auto &f = *static_cast<MediaControlFixture *>(p);
+    if (pause)
+      ++f.pauses;
+    else
+      ++f.resumes;
+    f.state = pause ? OBS_MEDIA_STATE_PAUSED : OBS_MEDIA_STATE_PLAYING;
+  };
+  obs_register_source(&info);
+  auto *fixture =
+      obs_source_create(info.id, "Control fixture", nullptr, nullptr);
+  check(fixture, "create controllable fixture");
+  dock.reset(createMediaDockWidget({}, {}));
+  dock->show();
+  auto *control = dock->findChild<QToolButton *>("media-play");
+  check(control && control->isEnabled(), "play enabled for fixture");
+  control->click();
+  check(control->toolTip() == "Play", "first click shows pending pause");
+  control->click();
+  check(control->toolTip() == "Pause", "second click shows pending resume");
+  // This headless fixture does not start OBS's video thread; real queued
+  // callbacks are covered by the live smoke test.
+
+  dock.reset();
+  obs_source_release(fixture);
+  obs_wait_for_destroy_queue();
   qInfo() << "dock-theme-test: shutting down OBS";
   obs_shutdown();
   qInfo() << "dock-theme-test: completed";
