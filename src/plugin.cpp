@@ -8,6 +8,7 @@
 #include "playlist-metadata.hpp"
 #include "preview-frame.hpp"
 #include "resolver.hpp"
+#include "resume-bookmark.hpp"
 #include "runtime-update.hpp"
 #include <QDir>
 #include <QFile>
@@ -44,6 +45,7 @@ struct Request {
   int buffer = 8;
   bool restart = false;
   bool recover = true;
+  bool resumeOnStartup = true, startupPaused = false, startupRestore = false;
   int64_t resumeMs = 0;
   uint64_t id = 0;
 };
@@ -101,6 +103,42 @@ struct Source {
   std::mutex mutex;
   std::condition_variable cv;
   Request current;
+  // Only the observed, confirmed media position is saved. Protected by
+  // mutex and tagged to the actual decoder generation/selected URL.
+  ResumeBookmark bookmark;
+  QString bookmarkUrl;
+  uint64_t bookmarkEpoch = 0;
+  std::atomic<bool> desiredPaused{false}, startupHold{false};
+  std::atomic<bool> skipInitialActivation{false};
+  bool holdIssued = false, restoringStartup = false;
+  int64_t seekIssuedAt = 0, holdStableSince = 0, holdPosition = -1;
+  QString sourceIdentity() const {
+    return QString::fromUtf8(obs_source_get_uuid(parent));
+  }
+  void saveBookmark(obs_data_t *settings) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto url =
+        QString::fromUtf8(obs_data_get_string(settings, "url")).trimmed();
+    const auto value = obs_data_get_bool(settings, "resume_on_startup") &&
+                               !url.isEmpty() && url == bookmarkUrl
+                           ? encodeResume(sourceIdentity(), url, bookmark)
+                           : QString{};
+    obs_data_set_string(settings, "resume_bookmark", qPrintable(value));
+  }
+  void markStopped() {
+    std::lock_guard<std::mutex> lock(mutex);
+    bookmarkUrl = current.url;
+    bookmark = {ResumeMode::Stopped, 0};
+    bookmarkEpoch = 0;
+  }
+  void observeBookmark(uint64_t gen, int64_t pos, bool live) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (bookmarkEpoch != gen || epoch != gen || bookmarkUrl != current.url)
+      return;
+    bookmark = {desiredPaused && !live ? ResumeMode::Paused
+                                       : ResumeMode::Playing,
+                live ? 0 : std::max<int64_t>(0, pos)};
+  }
   std::optional<Request> pending;
   std::optional<Result> result;
   std::thread worker;
@@ -214,6 +252,11 @@ struct Source {
     resumeTarget = 0;
     resumeDeadline = 0;
     resumeIssued = false;
+    startupHold = false;
+    holdIssued = false;
+    restoringStartup = false;
+    seekIssuedAt = holdStableSince = 0;
+    holdPosition = -1;
     if (!preserveRecovery)
       recovery.reset();
     auto gen = ++epoch;
@@ -253,19 +296,31 @@ struct Source {
     clearChild();
   }
   void queue(Request req, bool retry = false, bool segmentManual = false) {
-    bool hold = segmentManual && segmentPaused.load();
+    bool hold =
+        req.startupPaused || ((segmentManual || retry) && desiredPaused.load());
     cancel(retry);
     segmentSeeking = segmentManual;
     segmentPaused = hold;
+    desiredPaused = hold;
+    startupHold = hold && !segmentManual;
+    restoringStartup = req.startupRestore;
+    holdIssued = false;
     resumeTarget = req.resumeMs;
-    resumeGate = resumeTarget > 0 || segmentManual;
-    if (req.url.isEmpty())
+    resumeGate = resumeTarget > 0 || segmentManual || startupHold;
+    if (req.url.isEmpty()) {
+      std::lock_guard<std::mutex> lock(mutex);
+      bookmarkUrl.clear();
+      bookmarkEpoch = 0;
       return;
+    }
     if (!validSourceMediaUrl(req.url, audioOnly)) {
       fail(audioOnly
                ? "Use a public YouTube video, SoundCloud or Bandcamp track URL"
                : "Use an HTTPS YouTube, Twitch, Kick or TikTok video URL");
       blog(LOG_WARNING, "[streaming-media] Unsupported source URL");
+      std::lock_guard<std::mutex> lock(mutex);
+      bookmarkUrl.clear();
+      bookmarkEpoch = 0;
       return;
     }
     req.id = ++epoch;
@@ -274,6 +329,11 @@ struct Source {
     loading = true;
     {
       std::lock_guard<std::mutex> l(mutex);
+      bookmarkUrl = req.url;
+      bookmarkEpoch = req.id;
+      if (!retry && !segmentManual)
+        bookmark = {hold ? ResumeMode::Paused : ResumeMode::Playing,
+                    req.resumeMs};
       pending = req;
     }
     cv.notify_one();
@@ -790,6 +850,7 @@ struct Source {
       videoHeight = audioOnly ? 0 : obs_source_get_base_height(child);
       const bool mediaReady =
           audioOnly ? audioSeen.load() == epoch.load() : videoWidth.load() > 0;
+      const auto gen = epoch.load();
       auto st = obs_source_media_get_state(child);
       auto pos = obs_source_media_get_time(child),
            dur = obs_source_media_get_duration(child);
@@ -807,14 +868,23 @@ struct Source {
           dur = segmentDuration.load();
           if (vodClock.ready() && st == OBS_MEDIA_STATE_PLAYING && mediaReady &&
               resumeGate && !endSignal) {
-            resumeGate = false;
-            resumeTarget = 0;
-            resumeIssued = false;
-            segmentSeeking = false;
-            blog(LOG_DEBUG, "[streaming-media] VOD segment start %lld",
-                 (long long)segmentStart.load());
-            if (segmentPaused)
-              obs_source_media_play_pause(child, true);
+            if (startupHold && desiredPaused) {
+              if (!holdIssued) {
+                obs_source_media_play_pause(child, true);
+                holdIssued = true;
+              }
+            } else {
+              resumeGate = false;
+              startupHold = false;
+              restoringStartup = false;
+              resumeTarget = 0;
+              resumeIssued = false;
+              segmentSeeking = false;
+              blog(LOG_DEBUG, "[streaming-media] VOD segment start %lld",
+                   (long long)segmentStart.load());
+              if (segmentPaused)
+                obs_source_media_play_pause(child, true);
+            }
           }
         }
       }
@@ -828,14 +898,55 @@ struct Source {
                                                ? vodClock.target(resumeTarget)
                                                : resumeTarget);
           resumeIssued = true;
+          seekIssuedAt = nowMs();
           resumeDeadline = nowMs() + 18000;
-        } else if (std::abs(pos - resumeTarget) <= 2000) {
+        } else if (std::abs(pos - resumeTarget) <= 2000 &&
+                   (!(startupHold || restoringStartup) ||
+                    nowMs() - seekIssuedAt >= 750)) {
+          if (startupHold && desiredPaused) {
+            if (!holdIssued) {
+              obs_source_media_play_pause(child, true);
+              holdIssued = true;
+            }
+          } else {
+            resumeGate = false;
+            startupHold = false;
+            restoringStartup = false;
+            resumeTarget = 0;
+            resumeIssued = false;
+            blog(LOG_INFO, "[streaming-media] Recovered VOD playback position");
+          }
+        }
+      }
+      if (startupHold && holdIssued && !endSignal) {
+        // FFmpeg announces PAUSED before its asynchronous decoder seek and
+        // pause actually settle. Keep the output gate closed until its clock
+        // has remained stable, rather than exposing a transient timestamp.
+        if (st == OBS_MEDIA_STATE_PAUSED) {
+          if (holdPosition < 0 || std::abs(pos - holdPosition) > 100) {
+            holdPosition = pos;
+            holdStableSince = nowMs();
+          }
+        } else {
+          holdPosition = -1;
+          holdStableSince = 0;
+        }
+        if (!desiredPaused ||
+            (holdStableSince && nowMs() - holdStableSince >= 650)) {
+          if (!desiredPaused)
+            obs_source_media_play_pause(child, false);
+          startupHold = false;
+          restoringStartup = false;
+          holdIssued = false;
           resumeGate = false;
           resumeTarget = 0;
           resumeIssued = false;
-          blog(LOG_INFO, "[streaming-media] Recovered VOD playback position");
+          segmentSeeking = false;
         }
       }
+      if (!resumeGate && mediaReady && !endSignal &&
+          (st == OBS_MEDIA_STATE_PLAYING || st == OBS_MEDIA_STATE_PAUSED))
+        observeBookmark(gen, pos, sessionLive);
       bool resumeTimeout =
           resumeGate && resumeDeadline > 0 && nowMs() >= resumeDeadline;
       bool unexpectedStop = played && st == OBS_MEDIA_STATE_STOPPED;
@@ -866,6 +977,7 @@ struct Source {
         if (ended) {
           finalDuration = lastDuration;
           finished = true;
+          markStopped();
           obs_source_media_ended(parent);
         } else {
           auto position = resumeGate ? resumeTarget : progress.position();
@@ -1144,6 +1256,8 @@ struct Source {
     if (sessionLive) {
       resumeGate = false;
       resumeTarget = 0;
+      startupHold = false;
+      desiredPaused = false;
     }
     decoderEnded = false;
     failed = false;
@@ -1154,7 +1268,7 @@ struct Source {
          : r->media.manifest.isEmpty() ? "combined"
                                        : "HLS playlist");
   }
-  void update(obs_data_t *d) {
+  void update(obs_data_t *d, bool initial = false) {
     Request r;
     r.url = QString::fromUtf8(obs_data_get_string(d, "url")).trimmed();
     r.height = int(obs_data_get_int(d, "height"));
@@ -1165,6 +1279,18 @@ struct Source {
     r.buffer = int(obs_data_get_int(d, "buffer"));
     r.restart = obs_data_get_bool(d, "restart");
     r.recover = obs_data_get_bool(d, "auto_recover");
+    r.resumeOnStartup = obs_data_get_bool(d, "resume_on_startup");
+    std::optional<ResumeBookmark> restored;
+    if (initial && r.resumeOnStartup)
+      restored = decodeResume(
+          QString::fromUtf8(obs_data_get_string(d, "resume_bookmark")),
+          sourceIdentity(), r.url);
+    if (restored) {
+      skipInitialActivation = true;
+      r.startupRestore = true;
+      r.resumeMs = restored->position;
+      r.startupPaused = restored->mode == ResumeMode::Paused;
+    }
     bool changed;
     {
       std::lock_guard<std::mutex> l(mutex);
@@ -1172,13 +1298,23 @@ struct Source {
                 r.hw != current.hw || r.speed != current.speed ||
                 r.buffer != current.buffer;
       current = r;
+      current.resumeMs = 0;
+      current.startupPaused = false;
+      current.startupRestore = false;
     }
-    if (changed)
+    if (restored && restored->mode == ResumeMode::Stopped) {
+      markStopped();
+      return;
+    }
+    if (changed) {
+      if (!initial)
+        skipInitialActivation = false;
       queue(r);
-    else if (!r.recover && recovery.waiting())
+    } else if (!r.recover && recovery.waiting())
       cancel();
   }
   void reload() {
+    skipInitialActivation = false;
     Request r;
     {
       std::lock_guard<std::mutex> l(mutex);
@@ -1196,6 +1332,7 @@ void defaults(obs_data_t *s) {
   obs_data_set_default_int(s, "buffer", 8);
   obs_data_set_default_bool(s, "restart", false);
   obs_data_set_default_bool(s, "auto_recover", true);
+  obs_data_set_default_bool(s, "resume_on_startup", true);
   obs_data_set_default_string(s, "queue", "[]");
   obs_data_set_default_bool(s, "auto_advance", false);
   obs_data_set_default_bool(s, "remote_requests", false);
@@ -1219,6 +1356,8 @@ obs_properties_t *properties(void *) {
   obs_property_int_set_suffix(buffer, " MB");
   obs_properties_add_bool(p, "restart", "Restart on scene activation");
   obs_properties_add_bool(p, "auto_recover", "Recover interrupted playback");
+  obs_properties_add_bool(p, "resume_on_startup",
+                          "Resume playback on OBS startup");
   obs_properties_add_bool(p, "remote_requests",
                           "Accept WebSocket video requests");
   return p;
@@ -1284,7 +1423,7 @@ void *create(obs_data_t *settings, obs_source_t *parent) {
                    "string requestId)",
                    Source::importProc, s);
   s->worker = std::thread([s] { s->run(); });
-  s->update(settings);
+  s->update(settings, true);
   return s;
 }
 Source *self(void *p) { return static_cast<Source *>(p); }
@@ -1362,10 +1501,21 @@ void seek(void *p, int64_t ms) {
   }
 }
 void restart(void *p) { self(p)->reload(); }
-void stop(void *p) { self(p)->cancel(); }
+void stop(void *p) {
+  self(p)->cancel();
+  self(p)->markStopped();
+}
 void next(void *p) { self(p)->enqueue({"next", {}, -1, -1}); }
 void pause(void *p, bool paused) {
   auto s = self(p);
+  s->desiredPaused = paused;
+  if (paused && s->resumeGate && !s->segmentSeeking)
+    s->startupHold = true;
+  {
+    std::lock_guard<std::mutex> lock(s->mutex);
+    if (s->bookmarkEpoch && s->bookmark.mode != ResumeMode::Stopped)
+      s->bookmark.mode = paused ? ResumeMode::Paused : ResumeMode::Playing;
+  }
   if (s->segmentVod || s->segmentSeeking)
     s->segmentPaused = paused;
   if (s->segmentSeeking && (!s->accept || s->resumeGate))
@@ -1382,6 +1532,8 @@ void activate(void *p) {
     std::lock_guard<std::mutex> l(s->mutex);
     r = s->current.restart;
   }
+  if (s->skipInitialActivation.exchange(false))
+    return;
   if (r && !s->loading)
     s->reload();
 }
@@ -1397,6 +1549,9 @@ bool obs_module_load(void) {
   i.create = create;
   i.destroy = destroy;
   i.update = update;
+  i.save = [](void *p, obs_data_t *settings) {
+    self(p)->saveBookmark(settings);
+  };
   i.get_defaults = defaults;
   i.get_properties = properties;
   i.video_tick = tick;

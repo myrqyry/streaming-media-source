@@ -10,6 +10,7 @@ Paste a media link and select Play or Queue. The current thumbnail, title,
 actual decoded resolution, state, timeline and transport controls are shown
 without a browser. The queue is stored per source in the scene collection.
 Double-click an item to play it, or use the arrows and remove button.
+Pause/Play immediately reflects the requested transport action and reconciles with the decoder state; rapid successive clicks no longer send duplicate pause commands based on stale dock polling. The dock preview remains a still image, not a live video monitor.
 Auto advance is off by default; when enabled it advances only after an
 observed natural VOD end. Stop leaves upcoming entries intact. A premature
 decoder end or error preserves the queue and surfaces Retry, which resolves
@@ -84,6 +85,46 @@ playlist with an empty PATH and a fresh HOME. Queue added 99 entries alongside
 one existing entry without interrupting playback. Play selected the first video,
 preserved the existing queue, enabled automatic advancement, and restored actual
 video and mixer audio. Cancellation and the normal playback regression also passed.
+
+### Resume after reopening OBS
+
+Both Streaming Media and Streaming Audio have **Resume playback on OBS
+startup** in source Properties, enabled by default. During OBS's normal
+scene-collection save, the source records its last observed playback position
+(in milliseconds) and requested transport state. On the next load it
+resolves fresh media URLs and restores the position through the existing
+VOD recovery/seek path. Paused playback stays paused; explicitly stopped
+or naturally ended media stays stopped unless auto advance selected a new
+item. The remaining queue is preserved by the existing scene settings.
+Live streams reconnect rather than seeking to an old live timestamp.
+
+The initial activation after restoring a bookmark does not invoke
+**Restart on scene activation**; later activations still honor that setting.
+Manual Restart and selecting another item start from the beginning.
+Disabling startup resume restores the old startup behavior and clears the
+saved bookmark on the next normal OBS save.
+
+The bookmark is tied to the source UUID and selected URL using a digest;
+renaming a source does not change it, but copying settings to another
+source or changing the URL does not apply the old position. No resolved
+stream URLs, credentials, or additional downloaded media are saved.
+An older scene without a bookmark starts normally.
+
+Restoration is approximate: provider seek accuracy, FFmpeg keyframes,
+and indexed HLS segment boundaries can move the actual position slightly.
+The restored paused path waits for the decoder clock to settle before
+exposing the output. Normal closing/saving is supported; there is no
+independent ten-second crash checkpoint journal yet, so forced termination
+can lose progress since OBS last saved the collection. Startup recovery
+cannot restore an unavailable or expired provider item.
+
+Verified in separate isolated Linux OBS 32.2/libobs processes using a
+public YouTube video and a dedicated audio rendition. The video bookmark
+was restored paused, subsequently resumed actual video and mixed audio,
+and remained stopped after a further reload. The audio source resumed
+automatically with actual mixed audio. Other providers, live reconnection,
+long-distance seeks, and the full GUI shutdown/reopen workflow have not
+been separately qualified for this feature.
 
 ### Playback recovery
 

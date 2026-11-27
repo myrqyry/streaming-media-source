@@ -52,6 +52,7 @@
 #include <memory>
 #include <obs-frontend-api.h>
 #include <obs-module.h>
+#include <optional>
 namespace {
 constexpr const char *dockId = "streaming-media-dock";
 using Ref = std::unique_ptr<obs_source_t, decltype(&obs_source_release)>;
@@ -570,6 +571,32 @@ class MediaDock : public QWidget {
   QString dragSource, dragQueue;
   bool shuttingDown = false;
   enum obs_media_state state = OBS_MEDIA_STATE_NONE;
+  std::optional<bool> pendingPause;
+  QString pendingPauseSource;
+  QElapsedTimer pendingPauseClock;
+  bool presentedPlaying() const {
+    return pendingPause.has_value() ? !*pendingPause
+                                    : state == OBS_MEDIA_STATE_PLAYING;
+  }
+  void clearPlayIntent() {
+    pendingPause.reset();
+    pendingPauseSource.clear();
+    pendingPauseClock.invalidate();
+  }
+  void reconcilePlayIntent(obs_source_t *source) {
+    if (!pendingPause)
+      return;
+    // libobs queues both the parent and private decoder media actions.
+    // A short grace period avoids acknowledging a rapid opposite command
+    // against a state that was already true before either command ran.
+    if (!source ||
+        pendingPauseSource != QString::fromUtf8(obs_source_get_uuid(source)) ||
+        pendingPauseClock.elapsed() >= 2000 ||
+        (pendingPauseClock.elapsed() >= 250 &&
+         state == (*pendingPause ? OBS_MEDIA_STATE_PAUSED
+                                 : OBS_MEDIA_STATE_PLAYING)))
+      clearPlayIntent();
+  }
   int64_t duration = 0;
   bool seeking = false;
   int refreshCount = 0;
@@ -597,7 +624,7 @@ class MediaDock : public QWidget {
     return b;
   }
   void updatePlayIcon(bool force = false) {
-    bool playing = state == OBS_MEDIA_STATE_PLAYING;
+    bool playing = presentedPlaying();
     auto fallback = playing ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay;
     play->setProperty("mediaFallbackIcon", int(fallback));
     themeIcon(play, playing ? "icon-media-pause" : "icon-media-play", fallback,
@@ -1110,6 +1137,7 @@ class MediaDock : public QWidget {
     auto s = selected();
     auto id = sources->currentData().toString();
     if (id != sourceId) {
+      clearPlayIntent();
       cancelMetadata();
       if (importProcess)
         cancelImport("Import cancelled · source changed");
@@ -1241,8 +1269,10 @@ class MediaDock : public QWidget {
                          : clockText(pos) + " / " + clockText(duration));
     }
     timeline->setEnabled(present && duration > 0);
+    reconcilePlayIntent(s.get());
     updatePlayIcon();
-    play->setToolTip(state == OBS_MEDIA_STATE_PLAYING ? "Pause" : "Play");
+    play->setToolTip(presentedPlaying() ? "Pause" : "Play");
+    play->setAccessibleName(play->toolTip());
     for (auto b : {play, stop, retry})
       b->setEnabled(present);
     back->setEnabled(present && duration > 0);
@@ -1496,23 +1526,39 @@ public:
     connect(url, &QLineEdit::returnPressed, this, [this] { submit(true); });
     connect(play, &QToolButton::clicked, this, [this] {
       auto s = selected();
-      if (s)
-        obs_source_media_play_pause(s.get(), state == OBS_MEDIA_STATE_PLAYING);
+      if (!s)
+        return;
+      state = obs_source_media_get_state(s.get());
+      reconcilePlayIntent(s.get());
+      const bool pause = presentedPlaying();
+      pendingPause = pause;
+      pendingPauseSource = QString::fromUtf8(obs_source_get_uuid(s.get()));
+      pendingPauseClock.start();
+      obs_source_media_play_pause(s.get(), pause);
+      updatePlayIcon();
+      play->setToolTip(presentedPlaying() ? "Pause" : "Play");
+      play->setAccessibleName(play->toolTip());
     });
     connect(stop, &QToolButton::clicked, this, [this] {
       auto s = selected();
-      if (s)
+      if (s) {
+        clearPlayIntent();
         obs_source_media_stop(s.get());
+      }
     });
     connect(retry, &QToolButton::clicked, this, [this] {
       auto s = selected();
-      if (s)
+      if (s) {
+        clearPlayIntent();
         obs_source_media_restart(s.get());
+      }
     });
     connect(next, &QToolButton::clicked, this, [this] {
       auto s = selected();
-      if (s)
+      if (s) {
+        clearPlayIntent();
         obs_source_media_next(s.get());
+      }
     });
     connect(back, &QToolButton::clicked, this, [this] { skip(-10000); });
     connect(forward, &QToolButton::clicked, this, [this] { skip(10000); });

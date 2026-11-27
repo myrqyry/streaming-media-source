@@ -760,3 +760,54 @@ Caller now pins immutable db6c0a2495456274ecf91f18fc83dd64dc6d29e8; the
 identical temporary local workflow has been removed. Push the pilot
 branch to qualify cross-repository invocation and all eight artifacts.
 Do not migrate unrelated plugins or merge until that run is verified.
+
+Owner requested public name streaming-media-source. Pin shared CI
+197937941f13cd2adabd302a19691b44b62b2032 and set package-name independently
+of module name. Shared regressions 4/4 passed, prior hosted matrix 8/8
+with eight artifacts confirmed through API. No module, source ID, install
+directory or local checkout rename. New hosted names pending qualification.
+
+## 2026-11-25 pause/resume control regression
+Owner requested video resume fix. Existing smoke only asserted audio after resume; added focused SMOKE_RESUME_ONLY mode with luma frame hashes, actual dock rapid pause/play, external pause then dock resume, seek/resume, source teardown, optional SMOKE_HW. First observed zero nonblack changed frames after seeking to 10s in configured long video; cache-reset candidate failed the same test and was discarded. Corrected seek target to previously playing region and checked all output hashes; original binary passed dynamic reference HLS video and configured combined VOD with HW requested, so generalized native decoder freeze not established. Real dock bug: cached polling state plus asynchronous libobs parent/child transport queues can send Pause twice for rapid Pause/Play. RED actual dock headless fixture failed immediate pause feedback. GREEN pending per-source intent, immediate icon/tooltip/accessibility feedback, live decoder state on click, bounded reconciliation (250 ms acknowledgement grace, 2s expiry), clear on source switch and stop/retry/next. 9/9 CTests. Focused isolated native smoke on public moving HLS reference and configured VOD with HW requested both exit 0: plain pause/resume changed video, rapid dock pair advanced picture/audio/time, external pause/dock resume, seek/resume changed video, source teardown released. No decoder/cache hack, provider scope change, runtime update or extra production capture. Not tested long pause, network reconnect during pause, OBS restart-position persistence or other providers/platforms for this fix. Existing live OBS untouched; atomic binary-only install, old binary backed up. Local fix/media-resume-controls branch based on checked-out CI pilot HEAD 875f6b1 preserves pilot branch; no push.
+
+## 2026-11-25: resume saved media when OBS reopens
+
+User requested resuming the same spot after closing OBS. Default-on
+source property resume_on_startup, both video/audio modes. Native
+obs_source_info.save serializes a versioned UUID+selected-URL digest
+bound bookmark (last observed confirmed position and transport intent).
+Read only on initial source creation; reject stale/corrupt/mismatched
+bookmarks and preserve queue through existing OBS settings. Explicit
+Stop and natural end save stopped state. Initial activation preserves
+restoration, later activation respects restart preference. Fresh
+resolution and existing VOD resume gate/segment seeking; live reconnect
+instead of seek. Paused restoration waits for stable native decoder
+clock; no new decoder, download, background checkpoint writer or
+persisted signed URL. Native scene save only: independent 10-second
+crash journal not implemented. Provider seek precision is approximate.
+RED missing bookmark helper; first real video restart found transient
+clock after native PAUSED notification, fixed acknowledgement settling.
+Final 10/10 CTests /tmp/sms-restart-final-ctest2.log.
+Final isolated real libobs video process chain
+/tmp/sms-restart-final.Zshn5K: saved paused 3233ms, restored paused
+4066ms and stable, actual video/audio resumed, stopped reload stayed
+stopped, queue intact. Audio process chain
+/tmp/sms-restart-audio.qGK0nE: saved playing 3111ms, reopened actual
+mixer audio at 4086ms, queue preserved. Each exit 0. Shared module
+compiled; not an actual full GUI close/relaunch, not independently
+qualified for other providers, live restoration or long-distance seeks.
+Docs updated. Local checkpoint on fix/media-resume-controls. No install,
+push or production OBS restart.
+
+## 2026-11-26 branch reconciliation
+Fetched all seven remote branches. Native CI, Twitch, audio and TikTok
+feature heads were already ancestors of master. PR #5 merged the earlier
+CI tip, leaving 875f6b1 (public archive names) plus two resume-control
+commits outside master. Merged the resume branch as a real merge, retaining
+all three commits; its source/tests/CMake are byte-identical to the proven
+resume branch. Public-name run 45566510651 passed and uploaded eight correctly
+named OBS 32/33 artifacts. Raised shared CI minimum to 10 tests. Fresh local
+Release build against installed libobs SDK, 10/10 CTests, README/verifier
+checks, module-only staged payload and both install layouts passed. Prior
+isolated video/audio restart logs confirmed; no fresh network smoke or OBS GUI
+restart. No release, installation, branch deletion, or history rewrite.
