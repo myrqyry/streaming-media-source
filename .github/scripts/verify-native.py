@@ -194,11 +194,28 @@ def verify_stage(stage, target, version=DEFAULT_VERSION):
     return binary
 
 
+def verify_test_report(report, minimum_tests):
+    """Apply the shared CI minimum without rejecting additional passing tests."""
+    if minimum_tests < 1:
+        raise ValueError("minimum-tests must be positive")
+    cases = ET.parse(report).findall(".//testcase")
+    if len(cases) < minimum_tests or any(
+        c.find("skipped") is not None or c.find("failure") is not None
+        or c.find("error") is not None or c.get("status") in ("notrun", "disabled")
+        for c in cases
+    ):
+        raise RuntimeError(f"Native regression suite incomplete or failed: {len(cases)} results, minimum {minimum_tests}")
+    return len(cases)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("work", type=Path)
     p.add_argument("--obs-version", choices=sorted(PINS), default=DEFAULT_VERSION)
+    p.add_argument("--minimum-tests", type=int, default=os.environ.get("MINIMUM_TESTS", "10"))
     args = p.parse_args()
+    if args.minimum_tests < 1:
+        p.error("minimum-tests must be positive")
     version = args.obs_version
     pin = sdk_pin(version)
     work = args.work.resolve()
@@ -249,11 +266,7 @@ def main():
     report = work / "ctest.xml"
     run("ctest", "--test-dir", build, "-C", "Release", "--output-on-failure",
         "--no-tests=error", "--timeout", "90", "--output-junit", report, env=env)
-    cases = ET.parse(report).findall(".//testcase")
-    if len(cases) != 9 or any(c.find("skipped") is not None or c.find("failure") is not None
-                             or c.find("error") is not None or c.get("status") in ("notrun", "disabled")
-                             for c in cases):
-        raise RuntimeError("Native regression suite incomplete or failed")
+    test_count = verify_test_report(report, args.minimum_tests)
     stage = work / "stage"
     prefix = stage / MODULE if target == "windows-x64" else stage
     run("cmake", "--install", build, "--config", "Release", "--prefix", prefix)
@@ -274,11 +287,11 @@ def main():
             raise RuntimeError("Archive integrity failure")
     checksum = f"{digest(archive)}  {archive.name}\n"
     (work / "SHA256SUMS").write_text(checksum)
-    print(f"{target}: {len(cases)} tests; native module/notice archive validated")
+    print(f"{target}: {test_count} tests; native module/notice archive validated")
     if os.getenv("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
             f.write(f"### {target}: native build and test archive (verified locally)\n\n")
-            f.write(f"OBS {version}; {len(cases)} tests passed.\n\n```\n{checksum}```\n")
+            f.write(f"OBS {version}; {test_count} tests passed.\n\n```\n{checksum}```\n")
 
 
 if __name__ == "__main__":

@@ -811,3 +811,14 @@ Release build against installed libobs SDK, 10/10 CTests, README/verifier
 checks, module-only staged payload and both install layouts passed. Prior
 isolated video/audio restart logs confirmed; no fresh network smoke or OBS GUI
 restart. No release, installation, branch deletion, or history rewrite.
+
+## 2026-11-26 native CI report gate correction
+Hosted run 45914645113 at 708c128 compiled and passed all 10 CTests on all
+eight jobs; Linux OBS 32/33 uploaded both archives. The six Windows/macOS
+jobs rejected passing JUnit reports because verify-native.py still required
+exactly nine cases. Reproduced the missing report-validation contract red,
+then added a shared MINIMUM_TESTS/--minimum-tests threshold (default 10),
+retaining skip/failure/error rejection and permitting extra passing cases.
+Eight Python verifier tests pass, including minimum/extra/bad-report cases;
+real local 10-case CTest JUnit accepted. No plugin runtime changes. New
+hosted run must qualify native packaging; no installation or release.

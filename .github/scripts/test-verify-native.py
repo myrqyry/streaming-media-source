@@ -10,6 +10,28 @@ spec.loader.exec_module(native)
 
 
 class NativeTests(unittest.TestCase):
+    def test_native_report_respects_shared_minimum_and_rejects_bad_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = pathlib.Path(tmp) / "ctest.xml"
+            def write(count, extra="", status="run"):
+                cases = "".join(f'<testcase name="test-{i}" status="{status}">{extra}</testcase>'
+                                for i in range(count))
+                report.write_text(f"<testsuite>{cases}</testsuite>", encoding="utf-8")
+            for count in (10, 11):
+                write(count)
+                self.assertEqual(native.verify_test_report(report, 10), count)
+            for count, extra, status in ((9, "", "run"), (0, "", "run"),
+                (10, "<skipped/>", "run"), (10, "<failure/>", "run"),
+                (10, "<error/>", "run"), (10, "", "notrun"), (10, "", "disabled")):
+                with self.subTest(count=count, extra=extra, status=status):
+                    write(count, extra, status)
+                    with self.assertRaises(RuntimeError):
+                        native.verify_test_report(report, 10)
+            write(10)
+            for invalid in (0, -1):
+                with self.assertRaises(ValueError):
+                    native.verify_test_report(report, invalid)
+
     def test_obs33_pin_and_dependency_selection(self):
         pin = native.sdk_pin("33.0.3")
         self.assertEqual(pin["dependencies"], "2026-10-23")

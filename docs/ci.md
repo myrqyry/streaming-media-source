@@ -199,3 +199,14 @@ the public-name workflow revision passed the eight-job matrix and uploaded
 eight correctly named archives in [run 45566510651](https://github.com/myrqyry/streaming-media-source/actions/runs/45566510651).
 The reconciled resume-controls baseline raises the required CTest minimum to 10;
 its new hosted matrix remains to be verified.
+
+### Native test count correction
+
+The reconciled [run 45914645113](https://github.com/myrqyry/streaming-media-source/actions/runs/45914645113)
+compiled and passed all ten regressions across eight OBS 32/33 jobs. Both
+Linux archives were uploaded, but six Windows/macOS jobs stopped before
+packaging because the native verifier still required exactly nine tests.
+The native verifier now honors the shared `MINIMUM_TESTS` environment
+value (or explicit `--minimum-tests`), defaulting to 10 for direct runs.
+It permits additional passing cases but rejects incomplete or skipped,
+failed, or errored reports. Full hosted packaging requires a new run.
